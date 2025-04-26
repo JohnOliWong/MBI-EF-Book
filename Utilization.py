@@ -1,5 +1,5 @@
 from Dataloader.Dataloader_Excel import read_excel_eeg, read_excel_nirs
-from TemporalTransformer import FGTransformer as fg
+from EFBook import EFBook as ef
 
 import numpy as np
 import torch
@@ -37,7 +37,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 os.makedirs("Results", exist_ok=True)
 
 # define model
-model = fg(
+model = ef(
 depth, query_size, key_size, value_size, emb_size, num_heads, expansion,
 conv_dropout, self_dropout, cross_dropout, cls_dropout, num_classes, device).to(device)
 

@@ -1,8 +1,10 @@
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
 from torch import Tensor
 from einops import rearrange
+import random
 
 from DualConvLayer import TemporalConvLayer
 
@@ -373,40 +375,51 @@ def normalize(r, momentum=0.1):
 
 
 class Quantization(nn.Module):
+	'''
+	args:
+	codebook: collection of prototype vectors
+	N: number of times each codeword is matched
+	m: initiated by drawing random numbers from normal distribution
+	status: indication of whether a codeword is unactivated throughout consecutive 100 training steps
+	H[v]: set of fine-grained representations matched with codeword codebook[v]
+	'''
 	def _init__(self):
-	super().__init__()
+		super().__init__()
 
-	def forward(self, eeg, nirs, codebook, N, m, status, decay=0.99):
+	def forward(self, eeg, nirs, codebook, N, m, status, decay=0.99, emb_size=64):
 		H = torch.cat([eeg, nirs], dim=1)
 		quan_d = torch.cdist(H, codebook.weight, p=2)
 		quan_idx = torch.argmin(quan_d, dim=-1)
 		quan_tokens = codebook(quan_idx)
-
 		quan_eeg, quan_nirs = quan_tokens[:201, :], quan_tokens[201:, :]
 
 		dict_len = codebook.shape[0]
-		
-		H_v = defaultdict(list)
-		for i in range(len(H)):
-			v = argmin(distance(H[i, :], e_v) for e_v in codebook)
-			H_v[v].append(H[i, :])
+		N_current = torch.ones(dict_len)
+		H_current = dict * dict_len
+		m_current = torch.zeros(dict_len)
+		for v in range(len(H)):
+			distances = torch.norm(H[v, :] - codebook, p=2, dim=1)
+			index = torch.argmin(distances)
+			N_current[index] += 1
+			H_current[index].append(H[v, :])
 
 		for v in range(dict_len):
-			if len(H_v[v]) > 0:
-				N[v] = decay * N[v] + (1 - decay) * len(H_v[v])
-				m[v] = decay * m[v] + (1 - decay) * torch.sum(H_v[v])
+			if len(H_current[v]) > 0:
+				N_current[v] = decay * N[v] + (1 - decay) * len(H_current[v])
+				m_current[v] = decay * m[v] + (1 - decay) * torch.sum(H_current[v])
 				codebook[v] = m[v] / N[v]
 				status[v] = 0
 			else:
 				status[v] += 1
 				if status[v] > 100:
-					active_v = [v for v in range(len(N)) if N[v] > 0]
-					codebook[v] = random.choice(active_v) #########
-					N[v] = 1
-					m[v] = torch.rand(emb_size) #####
+					active_v = [v for v in range(dict_len) if N_current[v] > 1]
+					random_v = random.choice(active_v)
+					codebook[v] = codebook[random_v]
+					N_current[v] = 1
+					m_current[v] = torch.randn(emb_size)
 					status[v] = 0
 
-		return quan_eeg, quan_nirs, codebook, N, m, status
+		return quan_eeg, quan_nirs, codebook, N_current, m_current, status
 
 
 class Classifier(nn.Module):
@@ -420,7 +433,7 @@ class Classifier(nn.Module):
 		self.nirs_proj = nn.Linear(emb_size * 2, emb_size)
 
 		self.classifier = nn.Sequential(
-			nn.Linear(emb_size * 2, 128)
+			nn.Linear(emb_size * 2, 128),
 			nn.ReLU(),
 			nn.Linear(128, num_classes)
 		)
@@ -441,7 +454,7 @@ class Classifier(nn.Module):
 		return logits
 
 
-class FGTransformer(nn.Module):
+class EFBook(nn.Module):
 	def __init__(self, depth, query_size, key_size, value_size, emb_size, num_heads, expansion, conv_dropout,
 				 self_dropout, cross_dropout, cls_dropout, num_classes, device):
 		super().__init__()
@@ -450,8 +463,6 @@ class FGTransformer(nn.Module):
  
 		with torch.no_grad():
 			eeg, nirs = torch.randn(1, 30, 4000), torch.randn(1, 36, 200)
-			# eeg and fnirs signals are initialized as ranodm numbers
-			# this is to help generating the model, random tensors act as placeholders
 			eeg_token, nirs_token = self.temporal_conv_layer(eeg, nirs)
 			channels = [eeg_token.shape[-1], nirs_token.shape[-1]]
 

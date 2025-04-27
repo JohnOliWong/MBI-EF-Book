@@ -1,0 +1,225 @@
+from Dataloader.Dataloader_Excel import read_excel_eeg, read_excel_nirs
+from EFBook import EFBook as ef
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import os
+from sklearn.metrics import precision_recall_fscore_support, cohen_kappa_score
+from sklearn.model_selection import KFold
+import pandas as pd
+import random
+
+# Hyperparameters
+depth = 4
+depth_series = [4, 4] # dedicated for TSMMF
+query_size = 64
+key_size = 64
+value_size = 64
+emb_size = 64
+dict_len = 512
+num_heads = 4
+expansion = 2
+conv_dropout = 0.3
+self_dropout = 0.3
+cross_dropout = 0.3
+cls_dropout = 0.5
+num_classes = 2 # number of paradigm
+batch_size = 16
+num_epochs = 200
+learning_rate = 0.001
+mode = 0 # 0 = MI, 1 = MA
+
+# Device setup
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# Create directories for results
+os.makedirs("Results", exist_ok=True)
+
+# define model
+model = ef(
+depth, query_size, key_size, value_size, emb_size, num_heads, expansion,
+conv_dropout, self_dropout, cross_dropout, cls_dropout, num_classes, device).to(device)
+
+# model was converted to torch.float64 to avoid overflow ealier
+model = model.to(torch.float64)
+
+# Loss function & optimizer
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+def log_results(subject_id, acc):
+    """Logs training loss and accuracy to a file."""
+    log_path = f"Results/log_s{subject_id:02d}.txt"
+    with open(log_path, "a") as log_file:
+        log_file.write(f'{acc:4f}\n')
+log_excel = 'Results/Log.xlsx'
+
+def codebook_update(codebook, N, m, H, status, decay=0.99):
+	dict_len = codebook.shape[1]
+	for v in range(dict_len):
+		if H[v] > 0:
+			N[v] = decay * N[v] + (1 - decay) * len(H[v])
+			m[v] = decay * m[v] + (1 - decay) * torch.sum(H[v])
+			codebook[v] = N[v] / m[v]
+		else:
+			status[v] += 1
+			if status[v] >= 100:
+				active_v = [v for v in range(dict_len) if H[v] > 0]
+				random_v = random.choice(active_v)
+				codebook[v] = codebook[random_v]
+				status = 0
+				N[v] = 1
+				m[v] = codebook[v]
+
+	return codebook, N, m, status
+
+def evaluate_model(eval_loader, model):
+	model.eval()
+	total_loss, total_correct = 0, 0
+	all_preds, all_labels = [], []
+
+	with torch.no_grad():
+		for eval_eeg, eval_nirs, eval_labels in eval_loader:
+			eval_eeg, eval_nirs, eval_labels = eval_eeg.to(device), eval_nirs.to(device), eval_labels.to(device)
+			eval_eeg = eval_eeg.to(torch.float64)
+			eval_nirs = eval_nirs.to(torch.float64)
+
+			outputs = model(eval_eeg, eval_nirs)
+			loss = criterion(outputs, eval_labels)
+			total_loss += loss.item()
+
+			preds = torch.argmax(outputs, dim=1)
+			total_correct += (preds == eval_labels).sum().item()
+
+			all_preds.extend(preds.cpu().numpy())
+			all_labels.extend(eval_labels.cpu().numpy())
+
+	loss = total_loss / len(eval_loader)
+	acc = total_correct / len(eval_loader.dataset)
+	precision, recall, f1, _ = precision_recall_fscore_support(all_labels, all_preds, average='weighted')
+	kappa = cohen_kappa_score(all_labels, all_preds)
+
+	print(f"Evaluation Loss: {loss:.2f} | Evaluation Acc: {acc:.2f}")
+	return acc, precision, recall, f1, kappa
+
+# define the discrete latent space for cross-subject studies
+
+for subject in range(29):
+	subject += 1
+	eeg, labels = read_excel_eeg(subject, mode)
+	nirs, _ = read_excel_nirs(subject, mode)
+	eeg, nirs, labels = eeg.to(device), nirs.to(device), labels.to(device)
+
+	train_size = int(0.6 * len(eeg)) # 60/40 for training/testing
+	eval_size = len(eeg) - train_size
+
+	# create a tensor dataset
+	dataset = torch.utils.data.TensorDataset(eeg, nirs, labels)
+
+	# randomly split the data into training and evaluation sets
+	train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size])
+	train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+	eval_loader = torch.utils.data.DataLoader(eval_dataset, batch_size=batch_size, shuffle=False)
+
+	acc_list, precision_list, recall_list, f1_list, kappa_list = [], [], [], [], []
+
+	# define subject-wise codebook
+	codebook = torch.randn(1, dict_len, emb_size) # codebook
+	m = codebook.clone() # random numbers from normal distribution
+	N = torch.ones(dict_len) # number of times codewords are activated
+	status = torch.zeros(dict_len, dtype=int) # number of consecutive training steps each codeword is inactive
+	decay = 0.99
+	running_mean = torch.zeros(emb_size)
+	running_var = torch.zeros(emb_size)
+	momentum = 0.1
+	step = 0
+
+	# Training loop
+	for epoch in range(num_epochs):
+		model.train()
+		total_correct, total_loss = 0, 0
+
+		for batch_eeg, batch_nirs, batch_labels in train_loader:
+			batch_eeg = batch_eeg.to(device, dtype=torch.float64)
+			batch_nirs = batch_nirs.to(device, dtype=torch.float64)
+			batch_labels = batch_labels.to(device)
+
+			optimizer.zero_grad()
+			eeg_token, nirs_token = model(batch_eeg, batch_nirs)
+
+			n_trial = eeg_token.shape[0]
+			for i in range(n_trial):
+				step += 1
+				eeg_slice, nirs_slice = eeg_token[i, :, :], nirs_token[i, :, :]
+				vector = torch.cat([eeg_slice, nirs_slice], dim=1)
+				vector_len = vector.shape[1]
+				quan_idx = []
+				H = dict(vector_len)
+				for j in range(vector_len):
+					distances = torch.norm(vector[:, j, :] - codebook, p=2, dim=1)
+					v = torch.argmin(distances)
+					quan_idx.append(v)
+					H[v].append(vector[:, j, :])
+				quan_eeg_slice, quan_nirs_slice = codebook[:, quan_idx[:201], :], codebook[:, quan_idx[201:], :]
+				codebook, N, m, status = codebook_update(codebook, N, m, H, status, decay=0.99)
+
+			# outputs = model(batch_eeg, batch_nirs)
+			# loss = criterion(outputs, batch_labels)
+			# loss.backward()
+			# optimizer.step()
+
+			# total_loss += loss.item()
+			# preds = torch.argmax(outputs, dim=1)
+			# total_correct += (preds == batch_labels).sum().item()
+
+		# len(train_loader) is the number of batches
+		# len(train_dataset) is the number of trials
+		# loss = total_loss / len(train_loader)
+		# acc = total_correct / len(train_loader.dataset)
+		# print(f"Epoch {epoch} Training Loss: {loss:.2f} | Training Acc: {acc:.2f}")
+
+		# acc, precision, recall, f1, kappa = evaluate_model(eval_loader, model)
+		# acc_list.append(acc)
+		# precision_list.append(precision)
+		# recall_list.append(recall)
+		# f1_list.append(f1)
+		# kappa_list.append(kappa)
+
+	# mean_acc, std_acc = np.mean(acc_list), np.std(acc_list)
+	# mean_precision, std_precision = np.mean(precision_list), np.std(precision_list)
+	# mean_recall, std_recall = np.mean(recall_list), np.std(recall_list)
+	# mean_f1, std_f1 = np.mean(f1_list), np.std(f1_list)
+	# mean_kappa = np.mean(kappa_list)
+
+	# mean_acc, std_acc = mean_acc * 100, std_acc * 100
+	# mean_precision, std_precision = mean_precision * 100, std_precision * 100
+	# mean_recall, std_recall = mean_recall * 100, std_recall * 100
+	# mean_f1, std_f1 = mean_f1 * 100, std_f1 * 100
+
+	# log_path = f'Results/log_s{subject:2d}.txt'
+	# with open(log_path, 'a') as log_file:
+	# 	log_file.write(f'Accuracy: {mean_acc:.2f} ± {std_acc:.2f}\n')
+	# 	log_file.write(f'Precision: {mean_precision:.2f} ± {std_precision:.2f}\n')
+	# 	log_file.write(f'Recall: {mean_recall:.2f} ± {std_recall:.2f}\n')
+	# 	log_file.write(f'F1: {mean_f1:.2f} ± {std_f1:2f}\n')
+	# 	log_file.write(f'Kappa: {mean_kappa:.2f}\n')
+	# 	log_file.write('\n')
+
+	# new_row = pd.DataFrame([[mean_acc, std_acc, mean_precision, std_precision, mean_recall, std_recall, mean_f1, std_f1, mean_kappa]], 
+	# 					   columns=['Accuracy', 'Std_Accuracy', 'Precision', 'Std_Precision', 'Recall', 'Std_Recall', 'F1', 'Std_F1', 'Kappa'])
+	# new_row = new_row.round(2)
+	# if not os.path.exists(log_excel):
+	# 	new_row.to_excel(log_excel, index=False, engine='openpyxl')
+	# else:
+	# 	with pd.ExcelWriter(log_excel, mode='a', engine='openpyxl', if_sheet_exists='overlay') as writer:
+	# 		if 'Sheet1' in writer.sheets:
+	# 			startrow = writer.sheets['Sheet1'].max_row
+	# 		else:
+	# 			startrow = 0
+	# 		new_row.to_excel(writer, index=False, header=False, startrow=startrow)
+
+	# print(f'Subject:{subject} Accuracy: {mean_acc:.2f} ± {std_acc:.2f}\n')
+
+print('Training and evaluation completed\n')

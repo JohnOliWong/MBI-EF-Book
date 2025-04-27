@@ -422,6 +422,17 @@ class Quantization(nn.Module):
 		return quan_eeg, quan_nirs, codebook, N_current, m_current, status
 
 
+class CodebookUpdate(nn.Module):
+	'''
+	update codebook using exponential moving average
+	'''
+	def __init__(self):
+		super().__init__()
+
+	def forward(self, codebook, N, m, decay=0.99, emb_size=64):
+		pass
+
+
 class Classifier(nn.Module):
 	def __init__(self, emb_size=64, num_classes=2):
 		super().__init__()
@@ -476,5 +487,14 @@ class EFBook(nn.Module):
 		temporal_eeg, temporal_nirs = self.temporal_conv_layer(eeg, nirs)
 		temporal_eeg, temporal_nirs = temporal_eeg.squeeze(-2).permute(0, 2, 1), temporal_nirs.squeeze(-2).permute(0, 2, 1)
 		eeg_token, nirs_token = self.transformer(temporal_eeg, temporal_nirs, temporal_eeg, temporal_nirs)
+		# n_trial = eeg_token.shape[0]
+		# quan_eeg, quan_nirs = [], []
+		# for i in range(n_trial):
+		# 	eeg_slice, nirs_slice = eeg_token[i, :, :], nirs_token[i, :, :]
+		# 	quan_eeg_slice, quan_nirs_slice = Quantization(eeg_slice, nirs_slice) ###
+		# 	quan_eeg.append(quan_eeg_slice)
+		# 	quan_nirs.append(quan_nirs_slice)
+		# outputs = Classifier(eeg_token, nirs_token, quan_eeg, quan_nirs)
 
 		return eeg_token, nirs_token
+		# return outputs

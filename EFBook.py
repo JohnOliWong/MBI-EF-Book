@@ -289,7 +289,7 @@ class Transformer(nn.Module):
 		self.nirs_temporal_encoder = TransformerSelfEncoder(depth, query_size, key_size, value_size, emb_size,
 															num_heads, channels[1], expansion, cross_dropout, device)
 
-	def forward(self, temporal_eeg, temporal_nirs, spatial_eeg, spatial_nirs):
+	def forward(self, temporal_eeg, temporal_nirs):
 		eeg_temporal_outputs = self.eeg_temporal_encoder(temporal_eeg)
 		# print(eeg_temporal_outputs.shape)
 		nirs_temporal_outputs = self.nirs_temporal_encoder(temporal_nirs)
@@ -324,113 +324,69 @@ class AttentionFusion(nn.Module):
 		return outputs
 
 
-# decoder
-class ClassificationHead(nn.Module):
-	def __init__(self, num_classes, emb_size, dropout):
-		super(ClassificationHead, self).__init__()
-		self.dropout = dropout
-		self.attention_weight_sum = AttentionFusion(emb_size)
-		self.eeg_temporal = nn.Sequential(
-			nn.Linear(emb_size * 1, num_classes),
-		)
-		self.nirs_temporal = nn.Sequential(
-			nn.Linear(emb_size * 1, num_classes),
-		)
-		self.fusion_temporal = nn.Sequential(
-			nn.Linear(emb_size * 1, num_classes),
-		)
-
-		self.w = nn.Parameter(torch.Tensor([1., 1, 0.5]), requires_grad=True)
-
-
-	def forward(self, out):
-		eeg_temporal, nirs_temporal, temporal_cross = out
-		temporal_cross = self.attention_weight_sum(temporal_cross)
-		# learnable weights
-		w1 = torch.exp(self.w[0]) / torch.sum(torch.exp(self.w))
-		w2 = torch.exp(self.w[1]) / torch.sum(torch.exp(self.w))
-		w3 = torch.exp(self.w[2]) / torch.sum(torch.exp(self.w))
-		eeg_temporal, nirs_temporal, temporal_cross = self.eeg_temporal(eeg_temporal) * w1, self.nirs_temporal(nirs_temporal) * w2, self.fusion_temporal(temporal_cross) * w3
-		#
-		out = eeg_temporal + nirs_temporal + temporal_cross
-		return out
-
-
-def normalize(r, momentum=0.1):
-	"""
-	apply modality-wise batch normalization to input fine-grained representations
-
-	r: representations (batch_size x emb_size)
-	"""
-	if len(r) == 0:
-		return r
-	batch_mean = torch.mean(r, axis=0)
-	batch_var = torch.var(r, axis=0)
-
-	running_mean = momentum * batch_mean + (1 - momentum) * running_mean
-	running_var = momentum * batch_var + (1 - momentum) * running_var
-	epsilon = 1e-5
-	normalized_r = (r - batch_mean) / torch.sqrt(batch_var + epsilon)
-	return normalized_r
-
-
 class Quantization(nn.Module):
-	'''
-	args:
-	codebook: collection of prototype vectors
-	N: number of times each codeword is matched
-	m: initiated by drawing random numbers from normal distribution
-	status: indication of whether a codeword is unactivated throughout consecutive 100 training steps
-	H[v]: set of fine-grained representations matched with codeword codebook[v]
-	'''
-	def _init__(self):
+	def __init__(self, dict_len=512, emb_size=64, decay=0.99):
 		super().__init__()
+		self.codebook = nn.Parameter(torch.randn(1, dict_len, emb_size))
+		self.decay = decay
+		
+		self.register_buffer('N', torch.ones(dict_len))
+		self.register_buffer('m', self.codebook.clone())
+		self.register_buffer('status', torch.zeros(dict_len))
+		
+	def forward(self, cont_features):
+		distances = torch.cdist(cont_features, self.codebook)  # [B, S, dict_len]
+		quant_idx = torch.argmin(distances, dim=-1)  # [B, S]
+		quant_features = self.codebook[quant_idx]  # [B, S, emb_size]
+		
+		# STE梯度近似
+		quant_features = cont_features + (quant_features - cont_features).detach()
+		
+		# 更新码本统计量（仅训练时）
+		if self.training:
+			self._update_codebook(cont_features, quant_idx)
+		
+		codebook_loss = F.mse_loss(quant_features.detach(), cont_features)
+		return quant_features, codebook_loss
+	
+	def _update_codebook(self, features, indices):
+		batch_size, seq_len = indices.shape
+		
+		# 统计当前batch的使用情况
+		with torch.no_grad():
+			one_hot = F.one_hot(indices, num_classes=len(self.codebook)).float()  # [B, S, D]
+			counts = one_hot.sum(dim=[0,1])  # [D]
+			matched = (counts > 0)
+			
+			# 更新激活码字
+			if matched.any():
+				# 计算匹配特征的均值
+				sum_features = torch.einsum('bsd,bs->d', features, one_hot.sum(dim=1))
+				
+				# EMA更新
+				self.N[matched] = self.decay * self.N[matched] + (1-self.decay) * counts[matched]
+				self.m[matched] = self.decay * self.m[matched] + (1-self.decay) * sum_features[matched]
+				self.codebook.data[matched] = self.m[matched] / self.N[matched].unsqueeze(1)
+				self.status[matched] = 0
+				
+			# 处理未激活码字
+			inactive = ~matched
+			self.status[inactive] += 1
+			if (self.status >= 100).any():
+				self._replace_inactive_codewords()
 
-	def forward(self, eeg, nirs, codebook, N, m, status, decay=0.99, emb_size=64):
-		H = torch.cat([eeg, nirs], dim=1)
-		quan_d = torch.cdist(H, codebook.weight, p=2)
-		quan_idx = torch.argmin(quan_d, dim=-1)
-		quan_tokens = codebook(quan_idx)
-		quan_eeg, quan_nirs = quan_tokens[:201, :], quan_tokens[201:, :]
-
-		dict_len = codebook.shape[0]
-		N_current = torch.ones(dict_len)
-		H_current = dict * dict_len
-		m_current = torch.zeros(dict_len)
-		for v in range(len(H)):
-			distances = torch.norm(H[v, :] - codebook, p=2, dim=1)
-			index = torch.argmin(distances)
-			N_current[index] += 1
-			H_current[index].append(H[v, :])
-
-		for v in range(dict_len):
-			if len(H_current[v]) > 0:
-				N_current[v] = decay * N[v] + (1 - decay) * len(H_current[v])
-				m_current[v] = decay * m[v] + (1 - decay) * torch.sum(H_current[v])
-				codebook[v] = m[v] / N[v]
-				status[v] = 0
-			else:
-				status[v] += 1
-				if status[v] > 100:
-					active_v = [v for v in range(dict_len) if N_current[v] > 1]
-					random_v = random.choice(active_v)
-					codebook[v] = codebook[random_v]
-					N_current[v] = 1
-					m_current[v] = torch.randn(emb_size)
-					status[v] = 0
-
-		return quan_eeg, quan_nirs, codebook, N_current, m_current, status
-
-
-class CodebookUpdate(nn.Module):
-	'''
-	update codebook using exponential moving average
-	'''
-	def __init__(self):
-		super().__init__()
-
-	def forward(self, codebook, N, m, decay=0.99, emb_size=64):
-		pass
+	def _replace_inactive_codewords(self):
+		inactive = (self.status >= 100)
+		if inactive.any() and (self.N > 1).any():
+			# 从活跃码字中随机选择替换源
+			active_idx = torch.where(self.N > 1)[0]
+			replace_idx = torch.randint(0, len(active_idx), (inactive.sum(),))
+			
+			# 替换并重置统计量
+			self.codebook.data[inactive] = self.codebook.data[active_idx[replace_idx]]
+			self.N[inactive] = 1
+			self.m[inactive] = self.codebook.data[inactive]
+			self.status[inactive] = 0
 
 
 class Classifier(nn.Module):
@@ -466,7 +422,7 @@ class Classifier(nn.Module):
 
 
 class EFBook(nn.Module):
-	def __init__(self, depth, query_size, key_size, value_size, emb_size, num_heads, expansion, conv_dropout,
+	def __init__(self, depth, query_size, key_size, value_size, dict_len, emb_size, num_heads, expansion, conv_dropout,
 				 self_dropout, cross_dropout, cls_dropout, num_classes, device):
 		super().__init__()
 		# embedding size and dropout rate
@@ -480,21 +436,29 @@ class EFBook(nn.Module):
 		print('Stage I: fine-grained representations')
 		self.transformer = Transformer(depth, query_size, key_size, value_size, emb_size, num_heads, channels,
 									   expansion, device, self_dropout, cross_dropout)
-		# self.quantization = Quantization()
+		
+		print('Stage II: vector quantization')
+		self.quantizer = Quantization(dict_len, emb_size)
+
+		print('Stage III: feature aggregation & classification')
 		self.classifier = Classifier(emb_size, num_classes)
 
 	def forward(self, eeg, nirs):
-		temporal_eeg, temporal_nirs = self.temporal_conv_layer(eeg, nirs)
-		temporal_eeg, temporal_nirs = temporal_eeg.squeeze(-2).permute(0, 2, 1), temporal_nirs.squeeze(-2).permute(0, 2, 1)
-		eeg_token, nirs_token = self.transformer(temporal_eeg, temporal_nirs, temporal_eeg, temporal_nirs)
-		# n_trial = eeg_token.shape[0]
-		# quan_eeg, quan_nirs = [], []
-		# for i in range(n_trial):
-		# 	eeg_slice, nirs_slice = eeg_token[i, :, :], nirs_token[i, :, :]
-		# 	quan_eeg_slice, quan_nirs_slice = Quantization(eeg_slice, nirs_slice) ###
-		# 	quan_eeg.append(quan_eeg_slice)
-		# 	quan_nirs.append(quan_nirs_slice)
-		# outputs = Classifier(eeg_token, nirs_token, quan_eeg, quan_nirs)
+		temporal_eeg, temporal_nirs = self.temporal_conv(eeg, nirs)
+		temporal_eeg = temporal_eeg.squeeze(-2).permute(0,2,1)
+		temporal_nirs = temporal_nirs.squeeze(-2).permute(0,2,1)
 
-		return eeg_token, nirs_token
-		# return outputs
+		eeg_token, nirs_token = self.transformer(temporal_eeg, temporal_nirs)
+
+		quant_eeg, q_loss_eeg = self.quantizer(eeg_token)
+		quant_nirs, q_loss_nirs = self.quantizer(nirs_token)
+
+		logits = self.classifier(
+			eeg_token, nirs_token,
+			quant_eeg, quant_nirs
+		)
+
+		return {
+			'logits': logits,
+			'quant_loss': q_loss_eeg + q_loss_nirs
+		}

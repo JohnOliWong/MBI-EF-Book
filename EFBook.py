@@ -352,8 +352,10 @@ class Quantization(nn.Module):
 		if self.training:
 			self.codebook_update(cont_features, quan_idx)
 		
+		quan_eeg = quan_token[:, :201, :]
+		quan_nirs = quan_token[:, 201:, :]
 		codebook_loss = F.mse_loss(quan_token.detach(), cont_features)
-		return quan_token, codebook_loss
+		return quan_eeg, quan_nirs, codebook_loss
 	
 	def codebook_update(self, features, indices):		
 		with torch.no_grad():
@@ -447,15 +449,15 @@ class EFBook(nn.Module):
 
 		eeg_token, nirs_token = self.transformer(temporal_eeg, temporal_nirs)
 
-		quant_eeg, q_loss_eeg = self.quantizer(eeg_token)
-		quant_nirs, q_loss_nirs = self.quantizer(nirs_token)
+		cont_features = torch.cat([eeg_token, nirs_token], dim=1)
+		quan_eeg, quan_nirs, quan_loss = self.quantizer(cont_features)
 
 		logits = self.classifier(
 			eeg_token, nirs_token,
-			quant_eeg, quant_nirs
+			quan_eeg, quan_nirs
 		)
 
 		return {
 			'logits': logits,
-			'quant_loss': q_loss_eeg + q_loss_nirs
+			'quant_loss': quan_loss
 		}

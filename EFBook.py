@@ -220,55 +220,55 @@ class TransformerSelfEncoder(nn.Module):
 
 # cross-modal attention
 # no need of inserting cls token and positional embedding, since this step has been done in self-encoder
-class TransformerCrossEncoder(nn.Module):
-	def __init__(self, depth, query_size, key_size, value_size, emb_size, num_heads, channels, expansion, dropout,
-				 device):
-		super(TransformerCrossEncoder, self).__init__()
+# class TransformerCrossEncoder(nn.Module):
+# 	def __init__(self, depth, query_size, key_size, value_size, emb_size, num_heads, channels, expansion, dropout,
+# 				 device):
+# 		super(TransformerCrossEncoder, self).__init__()
 
-		self.blks = nn.Sequential() # blks is like a multi-layer container for stacking encoders
-		self.attention_weights = [None] * depth # store attention weights of each depth
+# 		self.blks = nn.Sequential() # blks is like a multi-layer container for stacking encoders
+# 		self.attention_weights = [None] * depth # store attention weights of each depth
 
-		for i in range(depth):
-			self.blks.add_module("block" + str(i),
-								 CrossEncoderBlock(query_size, key_size, value_size, emb_size, num_heads, expansion,
-												   dropout)) # cross-encoder
+# 		for i in range(depth):
+# 			self.blks.add_module("block" + str(i),
+# 								 CrossEncoderBlock(query_size, key_size, value_size, emb_size, num_heads, expansion,
+# 												   dropout)) # cross-encoder
 
-	def forward(self, x, y):
-		for i, blk in enumerate(self.blks):
-			x = blk(x, y)
-			self.attention_weights[i] = blk.attention.attention_weights
-		return x
+# 	def forward(self, x, y):
+# 		for i, blk in enumerate(self.blks):
+# 			x = blk(x, y)
+# 			self.attention_weights[i] = blk.attention.attention_weights
+# 		return x
 
-	@property
-	def cross_attention_weights(self):
-		return self.attention_weights
+# 	@property
+# 	def cross_attention_weights(self):
+# 		return self.attention_weights
 
 
 # concatenate input from both modalities, then start attention mechanism in an intra-modal fashion
-class TransformerCatEncoder(nn.Module):
-	def __init__(self, depth, query_size, key_size, value_size, emb_size, num_heads, channels, expansion, dropout,
-				 device):
-		super(TransformerCatEncoder, self).__init__()
-		self.modality_embedding = ModalityTypeEmbedding(emb_size)
-		self.blks = nn.Sequential()
-		self.attention_weights = [None] * depth
+# class TransformerCatEncoder(nn.Module):
+# 	def __init__(self, depth, query_size, key_size, value_size, emb_size, num_heads, channels, expansion, dropout,
+# 				 device):
+# 		super(TransformerCatEncoder, self).__init__()
+# 		self.modality_embedding = ModalityTypeEmbedding(emb_size)
+# 		self.blks = nn.Sequential()
+# 		self.attention_weights = [None] * depth
 
-		for i in range(depth):
-			self.blks.add_module("block" + str(i),
-								 SelfEncoderBlock(query_size, key_size, value_size, emb_size, num_heads, expansion,
-												  dropout)) # self-encoder
+# 		for i in range(depth):
+# 			self.blks.add_module("block" + str(i),
+# 								 SelfEncoderBlock(query_size, key_size, value_size, emb_size, num_heads, expansion,
+# 												  dropout)) # self-encoder
 
-	def forward(self, x, y, mask=None):
-		context = torch.cat([x, y], dim=1)
-		context = self.modality_embedding(context, mask)
-		for i, blk in enumerate(self.blks):
-			context = blk(context)
-			self.attention_weights[i] = blk.attention.attention_weights
-		return context
+# 	def forward(self, x, y, mask=None):
+# 		context = torch.cat([x, y], dim=1)
+# 		context = self.modality_embedding(context, mask)
+# 		for i, blk in enumerate(self.blks):
+# 			context = blk(context)
+# 			self.attention_weights[i] = blk.attention.attention_weights
+# 		return context
 
-	@property
-	def self_attention_weights(self):
-		return self.attention_weights
+# 	@property
+# 	def self_attention_weights(self):
+# 		return self.attention_weights
 
 
 # intra- and inter- modality encoder
@@ -325,9 +325,17 @@ class AttentionFusion(nn.Module):
 
 
 class Quantization(nn.Module):
+	'''
+	args:
+	cont_features: [16, 252, 64]
+	codebook: [512, 64]
+	N: [512,]
+	m: [1, 512, 64]
+	status: [512,]
+	'''
 	def __init__(self, dict_len=512, emb_size=64, decay=0.99):
 		super().__init__()
-		self.codebook = nn.Parameter(torch.randn(1, dict_len, emb_size))
+		self.codebook = nn.Parameter(torch.randn(dict_len, emb_size))
 		self.decay = decay
 		
 		self.register_buffer('N', torch.ones(dict_len))
@@ -335,55 +343,44 @@ class Quantization(nn.Module):
 		self.register_buffer('status', torch.zeros(dict_len))
 		
 	def forward(self, cont_features):
-		distances = torch.cdist(cont_features, self.codebook)  # [B, S, dict_len]
-		quant_idx = torch.argmin(distances, dim=-1)  # [B, S]
-		quant_features = self.codebook[quant_idx]  # [B, S, emb_size]
+		distances = torch.cdist(cont_features, self.codebook)  # [16, 252, 512]
+		quan_idx = torch.argmin(distances, dim=-1)  # [16, 252]
+		quan_token = self.codebook.data[quan_idx]  # [16, 252, 64]
+		quan_token = cont_features + (quan_token - cont_features).detach()
 		
-		# STE梯度近似
-		quant_features = cont_features + (quant_features - cont_features).detach()
-		
-		# 更新码本统计量（仅训练时）
+		# codebook varables are only updated during training
 		if self.training:
-			self._update_codebook(cont_features, quant_idx)
+			self.codebook_update(cont_features, quan_idx)
 		
-		codebook_loss = F.mse_loss(quant_features.detach(), cont_features)
-		return quant_features, codebook_loss
+		codebook_loss = F.mse_loss(quan_token.detach(), cont_features)
+		return quan_token, codebook_loss
 	
-	def _update_codebook(self, features, indices):
-		batch_size, seq_len = indices.shape
-		
-		# 统计当前batch的使用情况
+	def codebook_update(self, features, indices):		
 		with torch.no_grad():
-			one_hot = F.one_hot(indices, num_classes=len(self.codebook)).float()  # [B, S, D]
-			counts = one_hot.sum(dim=[0,1])  # [D]
+			one_hot = F.one_hot(indices, num_classes=len(self.codebook)).float()  # [16, 252, 512]
+			counts = one_hot.sum(dim=[0,1])  # [512]
 			matched = (counts > 0)
 			
-			# 更新激活码字
-			if matched.any():
-				# 计算匹配特征的均值
+			if matched.any(): # .any() returns bool variables
 				sum_features = torch.einsum('bsd,bs->d', features, one_hot.sum(dim=1))
-				
-				# EMA更新
 				self.N[matched] = self.decay * self.N[matched] + (1-self.decay) * counts[matched]
 				self.m[matched] = self.decay * self.m[matched] + (1-self.decay) * sum_features[matched]
 				self.codebook.data[matched] = self.m[matched] / self.N[matched].unsqueeze(1)
 				self.status[matched] = 0
-				
-			# 处理未激活码字
+			
 			inactive = ~matched
 			self.status[inactive] += 1
 			if (self.status >= 100).any():
-				self._replace_inactive_codewords()
+				self.codeword_replace()
 
-	def _replace_inactive_codewords(self):
+	def codeword_replace(self):
 		inactive = (self.status >= 100)
 		if inactive.any() and (self.N > 1).any():
-			# 从活跃码字中随机选择替换源
 			active_idx = torch.where(self.N > 1)[0]
-			replace_idx = torch.randint(0, len(active_idx), (inactive.sum(),))
+			random_idx = random.choice(active_idx)
+			# replace_idx = torch.randint(0, len(active_idx), (inactive.sum(),))
 			
-			# 替换并重置统计量
-			self.codebook.data[inactive] = self.codebook.data[active_idx[replace_idx]]
+			self.codebook.data[inactive] = self.codebook.data[random_idx]
 			self.N[inactive] = 1
 			self.m[inactive] = self.codebook.data[inactive]
 			self.status[inactive] = 0

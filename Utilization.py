@@ -104,14 +104,14 @@ for subject in range(29):
 	acc_list, precision_list, recall_list, f1_list, kappa_list = [], [], [], [], []
 
 	# define subject-wise codebook
-	codebook = torch.randn(dict_len, emb_size)
-	m_v = codebook.clone()
-	e_v = codebook.clone()
-	n_v = torch.ones(dict_len) # n_v(0) = 1, n_v.shape = ()
-	status = torch.zeros(dict_len, dtype=int)
-	running_mean = torch.zeros(emb_size)
-	running_var = torch.zeros(emb_size)
-	momentum = 0.1
+	# codebook = torch.randn(dict_len, emb_size)
+	# m_v = codebook.clone()
+	# e_v = codebook.clone()
+	# n_v = torch.ones(dict_len) # n_v(0) = 1, n_v.shape = ()
+	# status = torch.zeros(dict_len, dtype=int)
+	# running_mean = torch.zeros(emb_size)
+	# running_var = torch.zeros(emb_size)
+	# momentum = 0.1
 
 	# Training loop
 	for epoch in range(num_epochs):

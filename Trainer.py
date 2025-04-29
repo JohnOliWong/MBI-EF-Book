@@ -24,6 +24,7 @@ class Trainer:
 			config['value_size'],
 			config['dict_len'],
 			config['emb_size'],
+			config['decay'],
 			config['num_heads'],
 			config['expansion'],
 			config['conv_dropout'],
@@ -37,36 +38,35 @@ class Trainer:
 		self.optimizer = optim.Adam(self.model.parameters(), lr=config['learning_rate'])
 		self.criterion = nn.CrossEntropyLoss()
 
-		self.init_codebook(config['dict_len'], config['emb_size'])
+		# self.init_codebook(config['dict_len'], config['emb_size'], config['decay'])
 
 		os.makedirs('Results', exist_ok=True)
 
-	def init_codebook(self, dict_len, emb_size):
-		self.codebook = torch.randn(1, dict_len, emb_size).to(self.device)
-		self.m = self.codebook.clone()
-		self.N = torch.ones(dict_len).to(self.device)
-		self.status = torch.zeros(dict_len).to(self.device)
-		self.decay = 0.99
-		self.step = 0
-		return
+	# def init_codebook(self, dict_len, emb_size, decay):
+	# 	self.codebook = torch.randn(dict_len, emb_size).to(self.device)
+	# 	self.m = self.codebook.clone()
+	# 	self.N = torch.ones(dict_len).to(self.device)
+	# 	self.status = torch.zeros(dict_len).to(self.device)
+	# 	self.step = 0
+	# 	return
 
-	def codebook_update(self, H):
-		dict_len = self.codebook.shape[1]
-		for v in range(dict_len):
-			if H[v] > 0:
-				self.N[v] = self.decay * self.N[v] + (1 - self.decay) * len(H[v])
-				self.m[v] = self.decay * self.m[v] + (1 - self.decay) * torch.sum(torch.stack(H[v]), dim=0)
-				self.codebook[0, v] = self.N[v] / self.m[v]
-			else:
-				self.status[v] += 1
-				if self.status[v] >= 100:
-					active_v = [v for v in range(dict_len) if H[v] > 0]
-					if active_v: # only proceed if activated codewords exist
-						self.status[v] = 0
-						random_v = random.choice(active_v)
-						self.codebook[0, v] = self.codebook[0, random_v]
-						self.N[v] = 1
-						self.m[v] = self.codebook[0, v]
+	# def codebook_update(self, H):
+	# 	dict_len = self.codebook.shape[1]
+	# 	for v in range(dict_len):
+	# 		if H[v] > 0:
+	# 			self.N[v] = self.decay * self.N[v] + (1 - self.decay) * len(H[v])
+	# 			self.m[v] = self.decay * self.m[v] + (1 - self.decay) * torch.sum(torch.stack(H[v]), dim=0)
+	# 			self.codebook[0, v] = self.N[v] / self.m[v]
+	# 		else:
+	# 			self.status[v] += 1
+	# 			if self.status[v] >= 100:
+	# 				active_v = [v for v in range(dict_len) if H[v] > 0]
+	# 				if active_v: # only proceed if activated codewords exist
+	# 					self.status[v] = 0
+	# 					random_v = random.choice(active_v)
+	# 					self.codebook[0, v] = self.codebook[0, random_v]
+	# 					self.N[v] = 1
+	# 					self.m[v] = self.codebook[0, v]
 	
 	def train_epoch(self, train_loader):
 		self.model.train()
@@ -76,8 +76,6 @@ class Trainer:
 			batch_eeg = batch_eeg.to(self.device, dtype=torch.float64)
 			batch_nirs = batch_nirs.to(self.device, dtype=torch.float64)
 			batch_labels = batch_labels.to(self.device)
-
-			self.optimizer.zero_grad()
 			
 			# n_trial = eeg_token.shape[0]
 			# for i in range(n_trial):
@@ -103,18 +101,24 @@ class Trainer:
 			# 	quan_eeg_slice = self.codebook[:, quan_idx[:eeg_slice.shape[0]], :]
 			# 	quan_nirs_slice = self.codebook[:, quan_idx[eeg_slice.shape[0]:], :]
 			
-			outputs = self.model(batch_eeg, batch_nirs)
-			loss = self.criterion(outputs, batch_labels)
+			self.optimizer.zero_grad()
+			model_output = self.model(batch_eeg, batch_nirs)
+			outputs = model_output['outputs']
+			quan_loss = model_output['quan_loss']
+
+			quan_lambda = 0.1
+			cls_loss = self.criterion(outputs, batch_labels)
+			loss = cls_loss + quan_loss * quan_lambda
 			loss.backward()
 			self.optimizer.step()
 			
-			# Compute accuracy
 			preds = torch.argmax(outputs, dim=1)
 			total_correct += (preds == batch_labels).sum().item()
 			total_loss += loss.item()
 
 			train_loss = total_loss / len(train_loader)
 			train_acc = total_correct / len(train_loader.dataset)
+			print(f"Training Loss: {train_loss:.2f} | Training Acc: {train_acc:.2f}")
 			
 			return train_loss, train_acc
 	
@@ -129,8 +133,13 @@ class Trainer:
 				eval_nirs = eval_nirs.to(self.device, dtype=torch.float64)
 				eval_labels = eval_labels.to(self.device)
 				
-				outputs = self.model(eval_eeg, eval_nirs) # feature extraction, vector quantization, feature aggregation and classification should be done inside "model"
-				loss = self.criterion(outputs, eval_labels)
+				model_output = self.model(eval_eeg, eval_nirs)
+				outputs = model_output['outputs']
+				quan_loss = model_output['quan_loss']
+				
+				quan_lambda = 0.1
+				cls_loss = self.criterion(outputs, eval_labels)
+				loss = cls_loss + quan_loss * quan_lambda
 				total_loss += loss.item()
 				
 				preds = torch.argmax(outputs, dim=1)
@@ -152,7 +161,7 @@ class Trainer:
 		nirs, _ = read_excel_nirs(subject_id, mode)
 		eeg, nirs, labels = eeg.to(self.device), nirs.to(self.device), labels.to(self.device)
 		
-		train_size = int(0.6 * len(eeg)) # 60/40 for training/testing
+		train_size = int(0.6 * len(eeg)) # 60 trials/subject, 60/40 for training/testing
 		eval_size = len(eeg) - train_size
 		
 		dataset = torch.utils.data.TensorDataset(eeg, nirs, labels)
@@ -163,7 +172,7 @@ class Trainer:
 		acc_list, precision_list, recall_list, f1_list, kappa_list = [], [], [], [], []
 		
 		# Reset codebook variables for new subject
-		self.init_codebook_vars(self.config['dict_len'], self.config['emb_size'])
+		# self.init_codebook_vars(self.config['dict_len'], self.config['emb_size'])
 		
 		for epoch in range(self.config['num_epochs']):
 			train_loss, train_acc = self.train_epoch(train_loader)
@@ -176,19 +185,19 @@ class Trainer:
 			kappa_list.append(kappa)
 			
 			print(f"Subject {subject_id} | Epoch {epoch+1}/{self.config['num_epochs']} | "
-				f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.4f} | "
-				f"Eval Acc: {eval_acc:.4f}")
+				f"Train Loss: {train_loss:.2f} | Train Acc: {train_acc:.2f} | "
+				f"Eval Acc: {eval_acc:.2f}")
 
-		mean_acc, std_acc = np.mean(acc_list), np.std(acc_list)
-		mean_precision, std_precision = np.mean(precision_list), np.std(precision_list)
-		mean_recall, std_recall = np.mean(recall_list), np.std(recall_list)
-		mean_f1, std_f1 = np.mean(f1_list), np.std(f1_list)
-		mean_kappa = np.mean(kappa_list)
+		mean_acc, std_acc = np.mean(acc_list[-50:]), np.std(acc_list[-50:])
+		mean_precision, std_precision = np.mean(precision_list[-50:]), np.std(precision_list[-50:])
+		mean_recall, std_recall = np.mean(recall_list[-50:]), np.std(recall_list[-50:])
+		mean_f1, std_f1 = np.mean(f1_list[-50:]), np.std(f1_list[-50:])
+		mean_kappa = np.mean(kappa_list[-50:])
 
-		mean_acc, std_acc = mean_acc*100, std_acc*100
-		mean_precision, std_precision = mean_precision*100, std_precision*100
-		mean_recall, std_recall = mean_recall*100, std_recall*100
-		mean_f1, std_f1 = mean_f1*100, std_f1*100
+		mean_acc, std_acc = mean_acc * 100, std_acc * 100
+		mean_precision, std_precision = mean_precision * 100, std_precision * 100
+		mean_recall, std_recall = mean_recall * 100, std_recall * 100
+		mean_f1, std_f1 = mean_f1 * 100, std_f1 * 100
 
 		log_path = f'Results/log_s{subject_id:2d}.txt'
 		with open(log_path, 'a') as log_file:
@@ -224,6 +233,7 @@ config = {
 	'value_size': 64,
 	'emb_size': 64,
 	'dict_len': 512,
+	'decay': 0.99,
 	'num_heads': 4,
 	'expansion': 2,
 	'conv_dropout': 0.3,
@@ -232,7 +242,7 @@ config = {
 	'cls_dropout': 0.5,
 	'num_classes': 2,
 	'batch_size': 16,
-	'num_epochs': 200,
+	'num_epochs': 5,
 	'learning_rate': 0.001
 }
 

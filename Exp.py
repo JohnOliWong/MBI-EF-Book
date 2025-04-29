@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 dict_len = 512
 emb_size = 64
-cont_features = torch.randn(16, 252, 64)
+cont_features = torch.randn(32, 64)
 codebook = nn.Parameter(torch.randn(dict_len, emb_size))
 # print(codebook)
 N = torch.ones(dict_len)
@@ -18,7 +18,7 @@ quan_idx = torch.argmin(distances, dim=-1)
 # print(quan_idx)
 # print(quan_idx.data.shape)
 
-quan_token = torch.zeros(16, 252, 64)
+quan_token = torch.zeros(32, 64)
 quan_token = codebook[quan_idx]
 # print(quan_token)
 # print(quan_token.data.shape)

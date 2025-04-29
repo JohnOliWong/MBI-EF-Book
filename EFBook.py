@@ -165,32 +165,6 @@ class SelfEncoderBlock(nn.Module):
 		return y2
 
 
-# cross-attention + residual connection
-class CrossEncoderBlock(nn.Module):
-	def __init__(self, query_size, key_size, value_size, emb_size, num_heads=4, forward_expansion=2, dropout=0.5):
-		super(CrossEncoderBlock, self).__init__()
-
-		self.attention = MultiHeadAttention(query_size, key_size, value_size, emb_size, num_heads, dropout)
-		self.feed_forward = FeedForwardBlock(emb_size, expansion=forward_expansion, dropout=dropout)
-
-		self.norm1 = nn.LayerNorm(emb_size)
-		self.norm2 = nn.LayerNorm(emb_size)
-
-	def forward(self, x, y):
-		# x is dominant modality
-		res = x
-		x, y = self.norm1(x), self.norm2(y)
-		y1 = self.attention(x, y, y) # q from one modality, k and v from the other
-		y1 = y1 + res
-
-		res = y1
-		y2 = self.norm2(y1)
-		y2 = self.feed_forward(y2)
-		y2 = y2 + res
-
-		return y2
-
-
 # intra-modal attention
 class TransformerSelfEncoder(nn.Module):
 	def __init__(self, depth, query_size, key_size, value_size, emb_size, num_heads, channels, expansion, dropout,
@@ -216,59 +190,6 @@ class TransformerSelfEncoder(nn.Module):
 	@property
 	def self_attention_weights(self):
 		return self.attention_weights
-
-
-# cross-modal attention
-# no need of inserting cls token and positional embedding, since this step has been done in self-encoder
-# class TransformerCrossEncoder(nn.Module):
-# 	def __init__(self, depth, query_size, key_size, value_size, emb_size, num_heads, channels, expansion, dropout,
-# 				 device):
-# 		super(TransformerCrossEncoder, self).__init__()
-
-# 		self.blks = nn.Sequential() # blks is like a multi-layer container for stacking encoders
-# 		self.attention_weights = [None] * depth # store attention weights of each depth
-
-# 		for i in range(depth):
-# 			self.blks.add_module("block" + str(i),
-# 								 CrossEncoderBlock(query_size, key_size, value_size, emb_size, num_heads, expansion,
-# 												   dropout)) # cross-encoder
-
-# 	def forward(self, x, y):
-# 		for i, blk in enumerate(self.blks):
-# 			x = blk(x, y)
-# 			self.attention_weights[i] = blk.attention.attention_weights
-# 		return x
-
-# 	@property
-# 	def cross_attention_weights(self):
-# 		return self.attention_weights
-
-
-# concatenate input from both modalities, then start attention mechanism in an intra-modal fashion
-# class TransformerCatEncoder(nn.Module):
-# 	def __init__(self, depth, query_size, key_size, value_size, emb_size, num_heads, channels, expansion, dropout,
-# 				 device):
-# 		super(TransformerCatEncoder, self).__init__()
-# 		self.modality_embedding = ModalityTypeEmbedding(emb_size)
-# 		self.blks = nn.Sequential()
-# 		self.attention_weights = [None] * depth
-
-# 		for i in range(depth):
-# 			self.blks.add_module("block" + str(i),
-# 								 SelfEncoderBlock(query_size, key_size, value_size, emb_size, num_heads, expansion,
-# 												  dropout)) # self-encoder
-
-# 	def forward(self, x, y, mask=None):
-# 		context = torch.cat([x, y], dim=1)
-# 		context = self.modality_embedding(context, mask)
-# 		for i, blk in enumerate(self.blks):
-# 			context = blk(context)
-# 			self.attention_weights[i] = blk.attention.attention_weights
-# 		return context
-
-# 	@property
-# 	def self_attention_weights(self):
-# 		return self.attention_weights
 
 
 # intra- and inter- modality encoder
@@ -311,30 +232,18 @@ class Transformer(nn.Module):
 		return [self.eeg_nirs_temporal_spatial_attention_weights, self.eeg_temporal_spatial_attention_weights]
 
 
-class AttentionFusion(nn.Module):
-	def __init__(self, emb_size):
-		super(AttentionFusion, self).__init__()
-		self.weight = nn.Parameter(torch.randn(emb_size, 1), requires_grad=True)
-		self.softmax = nn.Softmax(-1)
-
-	def forward(self, out):
-		o = torch.cat([i @ self.weight for i in out], dim=-1)
-		alpha = self.softmax(o)
-		outputs = sum([i * alpha[:, index].unsqueeze(1) for index, i in enumerate(out)])
-		return outputs
-
-
 class Quantization(nn.Module):
 	'''
 	args:
-	cont_features: [16, 252, 64]
+	cont_features: [32, 64]
 	codebook: [512, 64]
 	N: [512,]
-	m: [1, 512, 64]
+	m: [512, 64]
 	status: [512,]
 	'''
 	def __init__(self, dict_len=512, emb_size=64, decay=0.99):
 		super().__init__()
+		# initialize subject-specificed, modal-invariant codebook
 		self.codebook = nn.Parameter(torch.randn(dict_len, emb_size))
 		self.decay = decay
 		
@@ -343,28 +252,32 @@ class Quantization(nn.Module):
 		self.register_buffer('status', torch.zeros(dict_len))
 		
 	def forward(self, cont_features):
-		distances = torch.cdist(cont_features, self.codebook)  # [16, 252, 512]
-		quan_idx = torch.argmin(distances, dim=-1)  # [16, 252]
-		quan_token = self.codebook.data[quan_idx]  # [16, 252, 64]
+		n_batch = cont_features.shape[0] // 2
+		distances = torch.cdist(cont_features, self.codebook)  # [32, 512]
+		quan_idx = torch.argmin(distances, dim=-1)  # [32]
+		quan_token = self.codebook.data[quan_idx]  # [32, 64]
 		quan_token = cont_features + (quan_token - cont_features).detach()
 		
 		# codebook varables are only updated during training
 		if self.training:
 			self.codebook_update(cont_features, quan_idx)
 		
-		quan_eeg = quan_token[:, :201, :]
-		quan_nirs = quan_token[:, 201:, :]
+		quan_eeg = quan_token[:n_batch, :]
+		quan_nirs = quan_token[n_batch:, :]
 		codebook_loss = F.mse_loss(quan_token.detach(), cont_features)
 		return quan_eeg, quan_nirs, codebook_loss
 	
-	def codebook_update(self, features, indices):		
+	def codebook_update(self, features, indices):
 		with torch.no_grad():
-			one_hot = F.one_hot(indices, num_classes=len(self.codebook)).float()  # [16, 252, 512]
-			counts = one_hot.sum(dim=[0,1])  # [512]
+			features = features.float()
+			one_hot = F.one_hot(indices, num_classes=len(self.codebook)).float()  # [32, 512]
+			counts = one_hot.sum(dim=[0])  # [512]
 			matched = (counts > 0)
 			
 			if matched.any(): # .any() returns bool variables
-				sum_features = torch.einsum('bsd,bs->d', features, one_hot.sum(dim=1))
+				# sum_features = torch.einsum('bsd,bs->d', features, one_hot.sum(dim=1))
+				sum_features = torch.einsum('nc,nd->cd', features, one_hot) # [512, 64], summation of fine-grained representations matched to corresponding codewords
+				sum_features = sum_features.T
 				self.N[matched] = self.decay * self.N[matched] + (1-self.decay) * counts[matched]
 				self.m[matched] = self.decay * self.m[matched] + (1-self.decay) * sum_features[matched]
 				self.codebook.data[matched] = self.m[matched] / self.N[matched].unsqueeze(1)
@@ -379,85 +292,119 @@ class Quantization(nn.Module):
 		inactive = (self.status >= 100)
 		if inactive.any() and (self.N > 1).any():
 			active_idx = torch.where(self.N > 1)[0]
-			random_idx = random.choice(active_idx)
+			random_idx = random.choice(active_idx.cpu().numpy())
 			# replace_idx = torch.randint(0, len(active_idx), (inactive.sum(),))
-			
-			self.codebook.data[inactive] = self.codebook.data[random_idx]
+
+			replace_codeword = self.codebook.data[random_idx].clone()
+			self.codebook.data[inactive] = replace_codeword
 			self.N[inactive] = 1
-			self.m[inactive] = self.codebook.data[inactive]
+			self.m[inactive] = self.codebook.data[inactive].clone()
 			self.status[inactive] = 0
+
+
+# class Classifier(nn.Module):
+#     def __init__(self, emb_size=64, num_classes=2):
+#         super().__init__()
+#         self.eeg_weight = nn.Parameter(torch.ones(1))
+#         self.nirs_weight = nn.Parameter(torch.ones(1))
+		
+#         self.eeg_proj = nn.Linear(emb_size, emb_size)
+#         self.nirs_proj = nn.Linear(emb_size, emb_size)
+		
+#         self.classifier = nn.Sequential(
+#             nn.Linear(emb_size * 2, 128),
+#             nn.ReLU(),
+#             nn.Linear(128, num_classes)
+#         )
+	
+#     def forward(self, batch_eeg, batch_nirs, quan_eeg, quan_nirs):
+#         # batch_eeg: [16, 64]
+#         # quan_eeg: [16, 64]
+#         # batch_nirs: [16, 64]
+#         # quan_nirs: [16, 64]
+		
+#         eeg_cat = torch.cat([batch_eeg, quan_eeg], dim=-1)  # [16, 128]
+#         eeg_pooled = eeg_cat.mean(dim=1)  # [B, 128]
+#         eeg_feat = self.eeg_proj(eeg_pooled)  # [B, 64]
+		
+#         nirs_cat = torch.cat([batch_nirs, quan_nirs], dim=-1)  # [16, 128]
+#         nirs_pooled = nirs_cat.mean(dim=1)  # [B, 128]
+#         nirs_feat = self.nirs_proj(nirs_pooled)  # [B, 64]
+		
+#         weights = torch.softmax(torch.stack([self.eeg_weight, self.nirs_weight]), dim=0)
+#         fused = weights[0] * eeg_feat + weights[1] * nirs_feat  # [B, 64]
+		
+#         combined = torch.cat([eeg_feat, nirs_feat], dim=-1)  # [B, 128]
+#         outputs = self.classifier(combined)  # [B, num_classes]
+		
+#         return outputs
 
 
 class Classifier(nn.Module):
 	def __init__(self, emb_size=64, num_classes=2):
 		super().__init__()
-
 		self.eeg_weight = nn.Parameter(torch.ones(1))
-		self_nirs_weight = nn.Parameter(torch.ones(1))
-
-		self.eeg_proj = nn.Linear(emb_size * 2, emb_size)
-		self.nirs_proj = nn.Linear(emb_size * 2, emb_size)
-
+		self.nirs_weight = nn.Parameter(torch.ones(1))
+		
+		self.eeg_transform = nn.Linear(emb_size * 2, emb_size)
+		self.nirs_transform = nn.Linear(emb_size * 2, emb_size)
+		
 		self.classifier = nn.Sequential(
 			nn.Linear(emb_size * 2, 128),
 			nn.ReLU(),
 			nn.Linear(128, num_classes)
 		)
-
-	def forward(self, batch_eeg, batch_nirs, quan_eeg, quan_nirs):
-		eeg_cat = torch.cat([batch_eeg, quan_eeg], dim=-1)
-		eeg_pooled = eeg_cat.mean(dim=1)
-		eeg_feat = self.eeg_proj(eeg_pooled)
-
-		nirs_cat = torch.cat([batch_nirs, quan_nirs], dim=-1)
-		nirs_pooled = nirs_cat.mean(dim=1)
-		nirs_feat = self.nirs_proj(nirs_pooled)
-
+	
+	def forward(self, eeg_token, nirs_token, quan_eeg, quan_nirs):
+		eeg_feats = torch.cat([eeg_token, quan_eeg], dim=-1)
+		nirs_feats = torch.cat([nirs_token, quan_nirs], dim=-1)
+		eeg_trans = self.eeg_transform(eeg_feats)
+		nirs_trans = self.nirs_transform(nirs_feats)
+		
 		weights = torch.softmax(torch.stack([self.eeg_weight, self.nirs_weight]), dim=0)
-		fused = weights[0] * eeg_feat + weights[1] * nirs_feat
-
-		logits = self.classifier(torch.cat([eeg_feat, nirs_feat], dim=-1))
-		return logits
+		fused = weights[0] * eeg_trans + weights[1] * nirs_trans
+		
+		combined = torch.cat([eeg_trans, nirs_trans], dim=-1)
+		outputs = self.classifier(combined)
+		
+		return outputs
 
 
 class EFBook(nn.Module):
-	def __init__(self, depth, query_size, key_size, value_size, dict_len, emb_size, num_heads, expansion, conv_dropout,
+	def __init__(self, depth, query_size, key_size, value_size, dict_len, emb_size, decay, num_heads, expansion, conv_dropout,
 				 self_dropout, cross_dropout, cls_dropout, num_classes, device):
 		super().__init__()
 		# embedding size and dropout rate
-		self.temporal_conv_layer = TemporalConvLayer(emb_size, conv_dropout)
+		self.temporal_conv = TemporalConvLayer(emb_size, conv_dropout)
  
 		with torch.no_grad():
 			eeg, nirs = torch.randn(1, 30, 4000), torch.randn(1, 36, 200)
-			eeg_token, nirs_token = self.temporal_conv_layer(eeg, nirs)
+			eeg_token, nirs_token = self.temporal_conv(eeg, nirs)
 			channels = [eeg_token.shape[-1], nirs_token.shape[-1]]
 
-		print('Stage I: fine-grained representations')
+		# print('Stage I: fine-grained representations')
 		self.transformer = Transformer(depth, query_size, key_size, value_size, emb_size, num_heads, channels,
 									   expansion, device, self_dropout, cross_dropout)
 		
-		print('Stage II: vector quantization')
-		self.quantizer = Quantization(dict_len, emb_size)
+		# print('Stage II: vector quantization')
+		self.quantizer = Quantization(dict_len, emb_size, decay)
 
-		print('Stage III: feature aggregation & classification')
+		# print('Stage III: feature aggregation & classification')
 		self.classifier = Classifier(emb_size, num_classes)
 
 	def forward(self, eeg, nirs):
-		temporal_eeg, temporal_nirs = self.temporal_conv(eeg, nirs)
+		temporal_eeg, temporal_nirs = self.temporal_conv(eeg, nirs) # [16, 200, 64]
 		temporal_eeg = temporal_eeg.squeeze(-2).permute(0,2,1)
 		temporal_nirs = temporal_nirs.squeeze(-2).permute(0,2,1)
 
-		eeg_token, nirs_token = self.transformer(temporal_eeg, temporal_nirs)
+		eeg_token, nirs_token = self.transformer(temporal_eeg, temporal_nirs) # [16, 64]
 
-		cont_features = torch.cat([eeg_token, nirs_token], dim=1)
+		cont_features = torch.cat([eeg_token, nirs_token], dim=0) # [32, 64]
 		quan_eeg, quan_nirs, quan_loss = self.quantizer(cont_features)
 
-		logits = self.classifier(
-			eeg_token, nirs_token,
-			quan_eeg, quan_nirs
-		)
+		outputs = self.classifier(eeg_token, nirs_token, quan_eeg, quan_nirs)
 
 		return {
-			'logits': logits,
-			'quant_loss': quan_loss
+			'outputs': outputs,
+			'quan_loss': quan_loss
 		}

@@ -1,5 +1,5 @@
 from Dataloader.Dataloader_Excel import read_excel_eeg, read_excel_nirs
-from EFBook import EFBook as ef
+from EFBook_Single import EFBook as ef
 
 import numpy as np
 import torch
@@ -7,7 +7,6 @@ import torch.nn as nn
 import torch.optim as optim
 import os
 from sklearn.metrics import precision_recall_fscore_support, cohen_kappa_score
-from sklearn.model_selection import KFold
 import pandas as pd
 import random
 from collections import defaultdict
@@ -38,35 +37,7 @@ class Trainer:
 		self.optimizer = optim.Adam(self.model.parameters(), lr=config['learning_rate'])
 		self.criterion = nn.CrossEntropyLoss()
 
-		# self.init_codebook(config['dict_len'], config['emb_size'], config['decay'])
-
 		os.makedirs('Results', exist_ok=True)
-
-	# def init_codebook(self, dict_len, emb_size, decay):
-	# 	self.codebook = torch.randn(dict_len, emb_size).to(self.device)
-	# 	self.m = self.codebook.clone()
-	# 	self.N = torch.ones(dict_len).to(self.device)
-	# 	self.status = torch.zeros(dict_len).to(self.device)
-	# 	self.step = 0
-	# 	return
-
-	# def codebook_update(self, H):
-	# 	dict_len = self.codebook.shape[1]
-	# 	for v in range(dict_len):
-	# 		if H[v] > 0:
-	# 			self.N[v] = self.decay * self.N[v] + (1 - self.decay) * len(H[v])
-	# 			self.m[v] = self.decay * self.m[v] + (1 - self.decay) * torch.sum(torch.stack(H[v]), dim=0)
-	# 			self.codebook[0, v] = self.N[v] / self.m[v]
-	# 		else:
-	# 			self.status[v] += 1
-	# 			if self.status[v] >= 100:
-	# 				active_v = [v for v in range(dict_len) if H[v] > 0]
-	# 				if active_v: # only proceed if activated codewords exist
-	# 					self.status[v] = 0
-	# 					random_v = random.choice(active_v)
-	# 					self.codebook[0, v] = self.codebook[0, random_v]
-	# 					self.N[v] = 1
-	# 					self.m[v] = self.codebook[0, v]
 	
 	def train_epoch(self, train_loader):
 		self.model.train()
@@ -76,30 +47,6 @@ class Trainer:
 			batch_eeg = batch_eeg.to(self.device, dtype=torch.float64)
 			batch_nirs = batch_nirs.to(self.device, dtype=torch.float64)
 			batch_labels = batch_labels.to(self.device)
-			
-			# n_trial = eeg_token.shape[0]
-			# for i in range(n_trial):
-			# 	self.step += 1
-			# 	eeg_slice, nirs_slice = eeg_token[i, :, :], nirs_token[i, :, :]
-			# 	vector = torch.cat([eeg_slice, nirs_slice], dim=0)  ###### Changed dim from 1 to 0
-			# 	vector_len = vector.shape[0]
-				
-			# 	# Initialize H as defaultdict of lists
-			# 	H = defaultdict(list)
-			# 	quan_idx = []
-				
-			# 	for j in range(vector_len):
-			# 		distances = torch.norm(vector[j, :] - self.codebook[0], p=2, dim=1)
-			# 		v = torch.argmin(distances).item()
-			# 		quan_idx.append(v)
-			# 		H[v].append(vector[j, :])
-				
-			# 	# Update codebook
-			# 	self.codebook_update(H)
-				
-			# 	# Quantize the tokens
-			# 	quan_eeg_slice = self.codebook[:, quan_idx[:eeg_slice.shape[0]], :]
-			# 	quan_nirs_slice = self.codebook[:, quan_idx[eeg_slice.shape[0]:], :]
 			
 			self.optimizer.zero_grad()
 			model_output = self.model(batch_eeg, batch_nirs)
@@ -170,9 +117,6 @@ class Trainer:
 		eval_loader = torch.utils.data.DataLoader(eval_dataset, batch_size=self.config['batch_size'], shuffle=False)
 		
 		acc_list, precision_list, recall_list, f1_list, kappa_list = [], [], [], [], []
-		
-		# Reset codebook variables for new subject
-		# self.init_codebook_vars(self.config['dict_len'], self.config['emb_size'])
 		
 		for epoch in range(self.config['num_epochs']):
 			train_loss, train_acc = self.train_epoch(train_loader)

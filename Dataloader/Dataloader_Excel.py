@@ -5,12 +5,17 @@ import pandas as pd
 
 
 def read_excel_eeg(subject_id, mode):
+	'''
+	outputs:
+	eeg [60, 30, 4000]
+	labels [60,]
+	'''
 	# 1. set directory
 	if not mode:
-		root_path = f'D:/HIT/MBI/Dataset/EF-MI-MA/Pre-EEG/{subject_id}'
+		root_path = f'D:/HIT/MBI/Dataset/EF-MI-MA/EEG-EXCEL-MI/{subject_id}'
 		eeg_key = f'{subject_id}_EEG.xls'
 	else:
-		root_path = f'D:/HIT/MBI/Dataset/EF-MI-MA/Pre-EEG-MA/{subject_id}'
+		root_path = f'D:/HIT/MBI/Dataset/EF-MI-MA/EEG-EXCEL-MA/{subject_id}'
 		eeg_key = f'{subject_id}_EEG-MA.xls'
 	eeg_path = os.path.join(root_path, eeg_key)
 	labels_key = f'{subject_id}_desc.xls'
@@ -60,10 +65,15 @@ def read_excel_eeg(subject_id, mode):
 	return eeg, labels
 
 def read_excel_nirs(subject_id, mode):
+	'''
+	outputs:
+	nirs.shape = [60, 72, 200]
+	labels.shape = [60,]
+	'''
 	if not mode:
-		root_path = f'D:/HIT/MBI/Dataset/EF-MI-MA/Pre-MI/{subject_id}'
+		root_path = f'D:/HIT/MBI/Dataset/EF-MI-MA/NIRS-EXCEL-MI/{subject_id}'
 	else:
-		root_path = f'D:/HIT/MBI/Dataset/EF-MI-MA/Pre-MA/{subject_id}'
+		root_path = f'D:/HIT/MBI/Dataset/EF-MI-MA/NIRS-EXCEL-MA/{subject_id}'
 	oxy_key = f'{subject_id}_oxy.xls'
 	oxy_path = os.path.join(root_path, oxy_key)
 	deoxy_key = f'{subject_id}_deoxy.xls'
@@ -102,6 +112,11 @@ def read_excel_nirs(subject_id, mode):
 	
 	HbO_L = np.array(HbO_L)
 	HbO_R = np.array(HbO_R)
+	HbR_L = np.array(HbR_L)
+	HbR_R = np.array(HbR_R)
+
+	HbO_L = np.concatenate([HbO_L, HbR_L], axis=1)
+	HbO_R = np.concatenate([HbO_R, HbR_R], axis=1)
 
 	nirs = []
 	labels = []

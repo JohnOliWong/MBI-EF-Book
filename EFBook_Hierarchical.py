@@ -355,6 +355,13 @@ class Classifier(nn.Module):
 
 
 class EFBook(nn.Module):
+	'''
+	feature_T = encoder_T(x)
+	quan_T = codebook_T(feature_T)
+	feature_B = encoder_B(x, quan_T)
+	quan_B  =codebook_B(feature_B)
+	x' = decoder(quan_T, quan_B)
+	'''
 	def __init__(self, depth, query_size, key_size, value_size, dict_len, emb_size, decay, num_heads, expansion, conv_dropout,
 				 self_dropout, cross_dropout, cls_dropout, num_classes, device):
 		super().__init__()
@@ -381,7 +388,15 @@ class EFBook(nn.Module):
 		temporal_eeg = temporal_eeg.squeeze(-2).permute(0,2,1)
 		temporal_nirs = temporal_nirs.squeeze(-2).permute(0,2,1)
 
-		eeg_token, nirs_token = self.transformer(temporal_eeg, temporal_nirs) # [16, 64]
+		# top_eeg, top_nirs = temporal_eeg[:, :, ::4], temporal_eeg[:, :, ::4]
+		# top_cont = torch.cat([top_eeg, top_nirs], dim=0)
+		# quan_top_eeg, quan_top_nirs = self.quantizer_top(top_cont)
+		# bottom_eeg = quan_top_eeg + temporal_eeg
+		# bottom_nirs = quan_top_nirs + temporal_nirs
+		# bottom_cont = torch.cat([bottom_eeg, bottom_nirs], dim=0)
+		# quan_bottom_eeg, quan_bottom_nirs = self.quantizer_bottom(bottom_cont)
+
+		# eeg_token, nirs_token = self.transformer(temporal_eeg, temporal_nirs) # [16, 64]
 
 		cont_features = torch.cat([eeg_token, nirs_token], dim=0) # [32, 64]
 		quan_eeg, quan_nirs, quan_loss = self.quantizer(cont_features)

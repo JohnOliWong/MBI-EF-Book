@@ -258,7 +258,7 @@ class Quantization(nn.Module):
 		quan_token = self.codebook.data[quan_idx]  # [32, 64]
 		quan_token = cont_features + (quan_token - cont_features).detach()
 		
-		# codebook varables are only updated during training
+		# codebook variables are only updated during training
 		if self.training:
 			self.codebook_update(cont_features, quan_idx)
 		

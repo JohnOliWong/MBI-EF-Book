@@ -235,17 +235,18 @@ class Transformer(nn.Module):
 class Quantization(nn.Module):
 	'''
 	args:
-	cont_features: [32, 64]
-	codebook: [512, 64]
-	N: [512,]
-	m: [512, 64]
-	status: [512,]
+	cont_features: input continuous concatenated EEG-fNIRS features [32, 64]
+	codebook: a dictionary of prototype vectors [512, 64]
+	N: number of times each codeword is matched [512,]
+	m: summation of continuous features matched to the current codeword [512, 64]
+	status: reflect if a codeword is active or not [512,]
 	'''
-	def __init__(self, dict_len=512, emb_size=64, decay=0.99):
+	def __init__(self, dict_len=512, emb_size=64, decay=0.99, ot_weight=1.0):
 		super().__init__()
 		# initialize subject-specificed, modal-invariant codebook
 		self.codebook = nn.Parameter(torch.randn(dict_len, emb_size))
 		self.decay = decay
+		self.ot_weight = ot_weight
 		
 		self.register_buffer('N', torch.ones(dict_len))
 		self.register_buffer('m', self.codebook.clone())
@@ -253,30 +254,38 @@ class Quantization(nn.Module):
 		
 	def forward(self, cont_features):
 		n_batch = cont_features.shape[0] // 2
+
+		# compute L2-distance between each feature-codeword pair
 		distances = torch.cdist(cont_features, self.codebook)  # [32, 512]
 		quan_idx = torch.argmin(distances, dim=-1)  # [32]
 		quan_token = self.codebook.data[quan_idx]  # [32, 64]
 		quan_token = cont_features + (quan_token - cont_features).detach()
 		
-		# codebook varables are only updated during training
+		# codebook variables are only updated during training
 		if self.training:
 			self.codebook_update(cont_features, quan_idx)
 		
 		quan_eeg = quan_token[:n_batch, :]
 		quan_nirs = quan_token[n_batch:, :]
-		codebook_loss = F.mse_loss(quan_token.detach(), cont_features)
+
+		# difference between continuous and discrete features
+		quan_loss = F.mse_loss(quan_token.detach(), cont_features)
+		# difference between quantized EEG and fNIRS features
+		ot_loss = self.ot_loss(cont_features, quan_idx)
+		codebook_loss = quan_loss + ot_loss
 		return quan_eeg, quan_nirs, codebook_loss
 	
 	def codebook_update(self, features, indices):
 		with torch.no_grad():
 			features = features.float()
+			# converts discrete codeword indices to sparse matrix
 			one_hot = F.one_hot(indices, num_classes=len(self.codebook)).float()  # [32, 512]
 			counts = one_hot.sum(dim=[0])  # [512]
 			matched = (counts > 0)
 			
 			if matched.any(): # .any() returns bool variables
-				# sum_features = torch.einsum('bsd,bs->d', features, one_hot.sum(dim=1))
-				sum_features = torch.einsum('nc,nd->cd', features, one_hot) # [512, 64], summation of fine-grained representations matched to corresponding codewords
+				# summation of fine-grained representations matched to the corresponding codeword
+				sum_features = torch.einsum('nc,nd->cd', features, one_hot) # [512, 64]
 				sum_features = sum_features.T
 				self.N[matched] = self.decay * self.N[matched] + (1-self.decay) * counts[matched]
 				self.m[matched] = self.decay * self.m[matched] + (1-self.decay) * sum_features[matched]
@@ -293,13 +302,26 @@ class Quantization(nn.Module):
 		if inactive.any() and (self.N > 1).any():
 			active_idx = torch.where(self.N > 1)[0]
 			random_idx = random.choice(active_idx.cpu().numpy())
-			# replace_idx = torch.randint(0, len(active_idx), (inactive.sum(),))
 
 			replace_codeword = self.codebook.data[random_idx].clone()
 			self.codebook.data[inactive] = replace_codeword
 			self.N[inactive] = 1
 			self.m[inactive] = self.codebook.data[inactive].clone()
 			self.status[inactive] = 0
+
+	def ot_loss(self, features, indices):
+		one_hot = F.one_hot(indices, num_classes=len(self.codebook)).float() # [32, 512]
+		# compute the probability of each codeword being matched
+		codebook_probs = one_hot.mean(dim=0)
+		# the ideal situation is all codewords have the same chance to be used
+		target_probs = torch.ones_like(codebook_probs) / len(self.codebook)
+		# utilize KL-divergence to make the actual codeword distribution align with the ideal distribution
+		ot_loss = F.kl_div(
+			input=torch.log(codebook_probs + 1e-10),
+			target=target_probs,
+			reduction='batchmean'
+		)
+		return ot_loss
 
 
 class Classifier(nn.Module):

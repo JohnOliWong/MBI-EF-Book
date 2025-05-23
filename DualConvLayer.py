@@ -14,31 +14,30 @@ channel_seq = np.array(range(72)).tolist()
 
 class SWConv2d(nn.Module):
     '''
-    Inspired by EEGNet and TSMMF
-
+    depthwise separable convolution
     SW_conv = Depthwise_conv + Pointwise_conv
-
     '''
     def __init__(self, in_channels, out_channels, kernel_size, padding=(0, 0), stride=(1, 1), bias=False):
         super().__init__()
         self.in_channels = in_channels
+        # channel-wise convolution
         self.depth_conv = nn.Conv2d(in_channels, in_channels, kernel_size=kernel_size, padding=padding,
                                     groups=in_channels, stride=stride, bias=bias)
+        # maps input channels to output channels
         self.point_conv = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=bias)
 
     def channel_shuffle(self, x):
         groups = self.in_channels
         batch_size, num_channels, height, width = x.data.size()
         channels_per_group = num_channels // groups
+
         # grouping
-        # b, num_channels, h, w =======>  b, groups, channels_per_group, h, w
+        # B, C, H, W -> B, G, C', H, W
         x = x.view(batch_size, groups, channels_per_group, height, width)
 
-        # channel shuffle
-        x = torch.transpose(x, 1, 2).contiguous()
-        # x.shape=(batch_size, channels_per_group, groups, height, width)
-        # flatten
-        x = x.view(batch_size, -1, height, width)
+        # channel shuffle, exchange dim=1 with dim=2
+        x = torch.transpose(x, 1, 2).contiguous() # x.shape=(batch_size, channels_per_group, groups, height, width)
+        x = x.view(batch_size, -1, height, width) # reshape x to the original shape
 
         return x
 

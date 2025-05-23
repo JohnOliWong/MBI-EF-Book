@@ -10,9 +10,7 @@ import torch
 from torch import nn as nn
 
 # nirs_chan_sel
-channel_seq = (np.array(
-    [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 13, 17, 18, 21, 23, 24, 27, 29, 30, 33, 35, 36, 16, 20, 19, 22,
-     26, 25, 28, 32, 31, 34]) - 1).tolist()
+channel_seq = np.array(range(72)).tolist()
 
 class SWConv2d(nn.Module):
     '''
@@ -58,7 +56,7 @@ class EEGSpatialConvLayer(nn.Module):
         super().__init__()
 
         # emb_size= = 64
-        # outputs_size = (30, 4000 / 4)
+        # output_size = (30, 4000 / 4)
         pooling_kernel = [4, 2, 5]
         self.eeg_block1 = nn.Sequential(
             nn.Conv2d(in_channels=1, out_channels=emb_size, kernel_size=(1, 15), padding=(0, 15 // 2), bias=bias),
@@ -68,7 +66,7 @@ class EEGSpatialConvLayer(nn.Module):
             nn.AvgPool2d((1, pooling_kernel[0])),
         )
 
-        # outputs_size = (30, 1000 / 2)
+        # output_size = (30, 1000 / 2)
         self.eeg_block2 = nn.Sequential(
             SWConv2d(in_channels=emb_size, out_channels=emb_size, kernel_size=(1, 15), padding=(0, 15 // 2), bias=bias),
             nn.BatchNorm2d(emb_size),
@@ -77,7 +75,7 @@ class EEGSpatialConvLayer(nn.Module):
             nn.AvgPool2d((1, pooling_kernel[1])),
         )
 
-        # outputs_size = (30, 500 / 5)
+        # output_size = (30, 500 / 5)
         self.eeg_block3 = nn.Sequential(
             SWConv2d(in_channels=emb_size, out_channels=emb_size, kernel_size=(1, 15), padding=(0, 15 // 2), bias=bias),
             nn.BatchNorm2d(emb_size),
@@ -86,7 +84,7 @@ class EEGSpatialConvLayer(nn.Module):
             nn.AvgPool2d((1, pooling_kernel[2])),
         )
 
-        # outputs_size = (30, 1)
+        # output_size = (30, 1)
         self.temporal_pooling = nn.AdaptiveAvgPool2d((30, 1))
 
     def forward(self, eeg):
@@ -105,7 +103,7 @@ class NIRSSpatialConvLayer(nn.Module):
         super().__init__()
 
         # emb_size = 64
-        # outputs_size = (36, 200 / 2)
+        # output_size = (36, 200 / 2)
         pooling_kernel = [2, 1, 2]
         self.dropout = dropout
         self.nirs_block1 = nn.Sequential(
@@ -116,7 +114,7 @@ class NIRSSpatialConvLayer(nn.Module):
             nn.AvgPool2d((1, pooling_kernel[0])),
         )
 
-        # outputs_size = (36, 100 / 1)
+        # output_size = (36, 100 / 1)
         self.nirs_block2 = nn.Sequential(
             SWConv2d(in_channels=emb_size, out_channels=emb_size, kernel_size=(1, 3), padding=(0, 3 // 2), stride=(1, 1), bias=bias),
             nn.BatchNorm2d(emb_size),
@@ -125,7 +123,7 @@ class NIRSSpatialConvLayer(nn.Module):
             nn.AvgPool2d((1, pooling_kernel[1])),
         )
 
-        # outputs_size = (36, 100 / 2)
+        # output_size = (36, 100 / 2)
         self.nirs_block3 = nn.Sequential(
             SWConv2d(in_channels=emb_size, out_channels=emb_size, kernel_size=(1, 3), padding=(0, 3 // 2), stride=(1, 1), bias=bias),
             nn.BatchNorm2d(emb_size),
@@ -134,11 +132,11 @@ class NIRSSpatialConvLayer(nn.Module):
             nn.AvgPool2d((1, pooling_kernel[2])),
         )
 
-        # outputs_size = (36, 1)
+        # output_size = (36, 1)
         self.temporal_pooling = nn.AdaptiveAvgPool2d((36, 1))
 
     def forward(self, nirs):
-        nirs = nirs[:, channel_seq, :]
+        nirs = nirs[:, :, :]
         if nirs.ndim == 3:
             nirs = nirs.unsqueeze(1)
         nirs = self.nirs_block1(nirs)
@@ -151,25 +149,31 @@ class NIRSSpatialConvLayer(nn.Module):
 
 # EEG Temporal Convolution
 class EEGTemporalConvLayer(nn.Module):
+    '''
+    applies 2D convolution along the temporal and spatial dimensions
+    output size: [B, E, 1, T']
+    B: batch size
+    E: embedding size
+    T': compressed temporal dimension
+    '''
     def __init__(self, emb_size, dropout, bias=False):
         self.dropout = dropout
         super().__init__()
 
         # kernel size for pooling
-        # outputs_size = (64, 200)
         pooling_kernel = [4, 1, 5]
 
         # emb_size = 64
-        # outputs_size = (30, 4000 / 4)
+        # output_size = (16, 64, 30, 4000 / 4)
         self.eeg_block1 = nn.Sequential(
-            nn.Conv2d(in_channels=1, out_channels=emb_size // 1, kernel_size=(1, 15), padding=(0, 15 // 2), bias=bias),
+            nn.Conv2d(in_channels=1, out_channels=emb_size // 1, kernel_size=(1, 15), padding=(0, 15 // 2), bias=bias), # same padding by filling 7 pixels on both sides along W
             nn.BatchNorm2d(emb_size // 1),
             nn.ReLU(),
             nn.Dropout(self.dropout),
             nn.AvgPool2d((1, pooling_kernel[0])),
         )
 
-        # outputs_size = (1, 1000 / 1)
+        # output_size = (16, 64, 1, 1000 / 1)
         # kernel_size = (channel, 1)
         self.eeg_block2 = nn.Sequential(
             SWConv2d(in_channels=emb_size // 1, out_channels=emb_size // 1, kernel_size=(30, 1), bias=bias),
@@ -179,7 +183,7 @@ class EEGTemporalConvLayer(nn.Module):
             nn.AvgPool2d((1, pooling_kernel[1])),
         )
 
-        # outputs_size = (1, 1000 / 5)
+        # output_size = (16, 64, 1, 1000 / 5)
         self.eeg_block3 = nn.Sequential(
             SWConv2d(in_channels=emb_size // 1, out_channels=emb_size, kernel_size=(1, 15), padding=(0, 15 // 2), bias=bias),
             nn.BatchNorm2d(emb_size),
@@ -204,11 +208,10 @@ class NIRSTemporalConvLayer(nn.Module):
         super().__init__()
         
         # emb_size = 64
-        # outputs_size = (64, 50)
         pooling_kernel = [2, 1, 2]
         self.dropout = dropout
 
-        # outputs_size = (36, 200 / 2)
+        # output_size = (16, 64, 72, 200 / 2)
         self.nirs_block1 = nn.Sequential(
             nn.Conv2d(in_channels=1, out_channels=emb_size // 1, kernel_size=(1, 3), padding=(0, 3 // 2), bias=bias),
             nn.BatchNorm2d(emb_size // 1),
@@ -217,17 +220,17 @@ class NIRSTemporalConvLayer(nn.Module):
             nn.AvgPool2d((1, pooling_kernel[0])),
         )
 
-        # outputs_size = (1, 100 / 1)
+        # output_size = (16, 64, 1, 100 / 1)
         # kernel_size = (channel, 1)
         self.nirs_block2 = nn.Sequential(
-            SWConv2d(in_channels=emb_size // 1, out_channels=emb_size // 1, kernel_size=(36, 1), padding=(0, 0), bias=bias),
+            SWConv2d(in_channels=emb_size // 1, out_channels=emb_size // 1, kernel_size=(72, 1), padding=(0, 0), bias=bias),
             nn.BatchNorm2d(emb_size // 1),
             nn.ReLU(),
             nn.Dropout(self.dropout),
             nn.AvgPool2d((1, pooling_kernel[1])),
         )
 
-        # outputs_size = (1, 100 / 2)
+        # output_size = (16, 64, 1, 100 / 2)
         self.nirs_block3 = nn.Sequential(
             SWConv2d(in_channels=emb_size // 1, out_channels=emb_size, kernel_size=(1, 3), padding=(0, 3 // 2), bias=bias),
             nn.BatchNorm2d(emb_size),
@@ -237,7 +240,7 @@ class NIRSTemporalConvLayer(nn.Module):
         )
 
     def forward(self, nirs):
-        nirs = nirs[:, channel_seq, :]
+        nirs = nirs[:, :, :]
         if nirs.ndim == 3:
             nirs = nirs.unsqueeze(1)
         nirs = self.nirs_block1(nirs)
@@ -258,7 +261,6 @@ class SpatialConvLayer(nn.Module):
         spatial_nirs_features = self.nirs_spatial_projection(nirs)
 
         return spatial_eeg_features, spatial_nirs_features
-
 
 
 class TemporalConvLayer(nn.Module):

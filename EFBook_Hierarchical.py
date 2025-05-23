@@ -384,9 +384,9 @@ class EFBook(nn.Module):
 		self.classifier = Classifier(emb_size, num_classes)
 
 	def forward(self, eeg, nirs):
-		temporal_eeg, temporal_nirs = self.temporal_conv(eeg, nirs) # [16, 200, 64]
+		temporal_eeg, temporal_nirs = self.temporal_conv(eeg, nirs) # [16, 64, 1, 200] [16, 64, 1, 50]
 		temporal_eeg = temporal_eeg.squeeze(-2).permute(0,2,1)
-		temporal_nirs = temporal_nirs.squeeze(-2).permute(0,2,1)
+		temporal_nirs = temporal_nirs.squeeze(-2).permute(0,2,1) # [16, 200, 64] [16, 50, 64]
 
 		# top_eeg, top_nirs = temporal_eeg[:, :, ::4], temporal_eeg[:, :, ::4]
 		# top_cont = torch.cat([top_eeg, top_nirs], dim=0)

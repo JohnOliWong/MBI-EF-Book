@@ -1,5 +1,5 @@
 from Dataloader.Dataloader_Excel import read_excel_eeg, read_excel_nirs
-from EFBook_Single import EFBook as ef
+from EFBook_Hierarchical import EFBook as ef
 
 import numpy as np
 import torch
@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.optim as optim
 import os
 from sklearn.metrics import precision_recall_fscore_support, cohen_kappa_score
+from sklearn.model_selection import KFold
 import pandas as pd
 import random
 from collections import defaultdict
@@ -187,7 +188,7 @@ config = {
 	'num_classes': 2,
 	'batch_size': 16,
 	'num_epochs': 5,
-	'learning_rate': 0.001
+	'learning_rate': 1e-3
 }
 
 # Initialize and run trainer

@@ -1,5 +1,5 @@
 import torch
-from torch import nn
+import torch.nn as nn
 import torch.nn.functional as F
 
 device = ('cuda' if torch.cuda.is_available() else 'cpu')
@@ -39,3 +39,15 @@ counts = one_hot.sum(dim=[0,1])
 matched = (counts > 0)
 print(counts.data.shape)
 print(matched)
+
+x = torch.randn(16, 200, 64)
+x_pool = x.permute(0, 2, 1)  # [16, 64, 200]
+pool = nn.AvgPool1d(kernel_size=4, stride=4)
+output = pool(x_pool)  # [16, 64, 50]
+
+output = output.permute(0, 2, 1)  # [16, 50, 64]
+projection = nn.Linear(64, 16)
+output = projection(output)
+
+print("Input: ", x.shape)
+print("Output: ", output.shape)

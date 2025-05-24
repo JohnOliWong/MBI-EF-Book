@@ -232,41 +232,90 @@ class Transformer(nn.Module):
 		return [self.eeg_nirs_temporal_spatial_attention_weights, self.eeg_temporal_spatial_attention_weights]
 
 
+class Pooling(nn.Module):
+	def __init__(self):
+		super().__init__()
+		self.pool = nn.AvgPool1d(kernel_size=4, stride=4)
+		self.projection = nn.Sequential(
+			nn.Linear(64, 32),
+			nn.ReLU(),
+			nn.Linear(32, 16)
+		)
+
+	def forward(self, x):
+		x = x.permute(0, 2, 1)
+		x = self.pool(x)
+		x = x.permute(0, 2, 1)
+		x = self.projection(x)
+		return x
+
+
+class ConditionalFusion(nn.Module):
+	def __init__(self):
+		super().__init__()
+		self.projection = nn.Sequential(
+			nn.Linear(16, 32),
+			nn.ReLU(),
+			nn.Linear(32, 64)
+		)
+		self.attention = nn.MultiheadAttention(embed_dim=64, num_heads=64)
+
+	def forward(self, x, e_top):
+		time_dim = x.shape[1]
+		e_top = e_top.permute(0, 2, 1)
+		e_top = F.interpolate(e_top, size=time_dim, mode='linear')
+		e_top = e_top.permute(0, 2, 1)
+		e_top = self.projection(e_top)
+
+		# h_bottom = x + self.projection(e_top)
+		h_bottom, _ = self.attention(
+			query=e_top,
+			key=x,
+			value=x
+		)
+		return h_bottom
+
+
 class Quantization(nn.Module):
 	'''
 	args:
-	cont_features: input continuous concatenated EEG-fNIRS features [32, 64]
-	codebook: a dictionary of prototype vectors [512, 64]
-	N: number of times each codeword is matched [512,]
-	m: summation of continuous features matched to the current codeword [512, 64]
-	status: reflect if a codeword is active or not [512,]
+	cont_features: input continuous concatenated EEG-fNIRS features [B, T, E]
+	quan_features: quantized vectors [B, T, E]
+	codebook: a dictionary of prototype vectors [D, E]
+	N: number of times each codeword is matched [D,]
+	m: summation of continuous features matched to the current codeword [D, E]
+	status: reflect if a codeword is active or not [D,]
 	'''
-	def __init__(self, dict_len=512, emb_size=64, decay=0.99, ot_weight=1.0):
+	def __init__(self, dict_len, emb_size, decay=0.99, ot_weight=1.0):
 		super().__init__()
-		# initialize subject-specificed, modal-invariant codebook
-		self.codebook = nn.Parameter(torch.randn(dict_len, emb_size))
+		self.dict_len = dict_len
+		self.emb_size = emb_size
 		self.decay = decay
 		self.ot_weight = ot_weight
-		
+
+		# initiate subject-specific, modality-invariant codebook
+		self.codebook = nn.Parameter(torch.randn(dict_len, emb_size))
 		self.register_buffer('N', torch.ones(dict_len))
 		self.register_buffer('m', self.codebook.clone())
 		self.register_buffer('status', torch.zeros(dict_len))
-		
-	def forward(self, cont_features):
-		n_batch = cont_features.shape[0] // 2
+
+	def forward(self, x, y):
+		time_x = x.shape[1]
+		time_y = y.shape[1]
+		cont_features = torch.cat([x, y], dim=1) # [B, T', E]
 
 		# compute L2-distance between each feature-codeword pair
-		distances = torch.cdist(cont_features, self.codebook)  # [32, 512]
-		quan_idx = torch.argmin(distances, dim=-1)  # [32]
-		quan_token = self.codebook.data[quan_idx]  # [32, 64]
+		distances = torch.cdist(cont_features, self.codebook)
+		quan_idx = torch.argmin(distances, dim=-1)  # [B, T']
+		quan_token = self.codebook.data[quan_idx]  # [B, T', E]
 		quan_token = cont_features + (quan_token - cont_features).detach()
 		
 		# codebook variables are only updated during training
 		if self.training:
 			self.codebook_update(cont_features, quan_idx)
 		
-		quan_eeg = quan_token[:n_batch, :]
-		quan_nirs = quan_token[n_batch:, :]
+		quan_eeg = quan_token[:, :time_x, :]
+		quan_nirs = quan_token[:, time_x:, :]
 
 		# difference between continuous and discrete features
 		quan_loss = F.mse_loss(quan_token.detach(), cont_features)
@@ -279,16 +328,16 @@ class Quantization(nn.Module):
 		with torch.no_grad():
 			features = features.float()
 			# converts discrete codeword indices to sparse matrix
-			one_hot = F.one_hot(indices, num_classes=len(self.codebook)).float()  # [32, 512]
-			counts = one_hot.sum(dim=[0])  # [512]
+			one_hot = F.one_hot(indices, num_classes=len(self.codebook)).float()  # [B, T', D]
+			counts = one_hot.sum(dim=[0, 1])  # [D]
 			matched = (counts > 0)
 			
 			if matched.any(): # .any() returns bool variables
 				# summation of fine-grained representations matched to the corresponding codeword
-				sum_features = torch.einsum('nc,nd->cd', features, one_hot) # [512, 64]
-				sum_features = sum_features.T
+				sum_features = torch.einsum('bte,btd->de', features, one_hot) # [D, E]
+				# sum_features = sum_features.T
 				self.N[matched] = self.decay * self.N[matched] + (1-self.decay) * counts[matched]
-				self.m[matched] = self.decay * self.m[matched] + (1-self.decay) * sum_features[matched]
+				self.m[matched] = self.decay * self.m[matched] + (1-self.decay) * sum_features[matched, :]
 				self.codebook.data[matched] = self.m[matched] / self.N[matched].unsqueeze(1)
 				self.status[matched] = 0
 			
@@ -310,14 +359,14 @@ class Quantization(nn.Module):
 			self.status[inactive] = 0
 
 	def ot_loss(self, features, indices):
-		one_hot = F.one_hot(indices, num_classes=len(self.codebook)).float() # [32, 512]
+		one_hot = F.one_hot(indices, num_classes=len(self.codebook)).float()
 		# compute the probability of each codeword being matched
-		codebook_probs = one_hot.mean(dim=0)
+		codebook_probs = one_hot.mean(dim=[0, 1])
 		# the ideal situation is all codewords have the same chance to be used
 		target_probs = torch.ones_like(codebook_probs) / len(self.codebook)
 		# utilize KL-divergence to make the actual codeword distribution align with the ideal distribution
 		ot_loss = F.kl_div(
-			input=torch.log(codebook_probs + 1e-10),
+			input=torch.log(codebook_probs + 1e-6),
 			target=target_probs,
 			reduction='batchmean'
 		)
@@ -325,32 +374,27 @@ class Quantization(nn.Module):
 
 
 class Classifier(nn.Module):
-	def __init__(self, emb_size=64, num_classes=2):
+	def __init__(self, embed_dim=64, num_heads=4, num_classes=2):
 		super().__init__()
-		self.eeg_weight = nn.Parameter(torch.ones(1))
-		self.nirs_weight = nn.Parameter(torch.ones(1))
-		
-		self.eeg_transform = nn.Linear(emb_size * 2, emb_size)
-		self.nirs_transform = nn.Linear(emb_size * 2, emb_size)
-		
-		self.classifier = nn.Sequential(
-			nn.Linear(emb_size * 2, 128),
+		self.attention = nn.MultiheadAttention(embed_dim, num_heads)
+		self.fusion = ConditionalFusion()
+		self.projection = nn.Sequential(
+			nn.Linear(16, 32),
 			nn.ReLU(),
-			nn.Linear(128, num_classes)
+			nn.Linear(32, 64)
 		)
-	
-	def forward(self, eeg_token, nirs_token, quan_eeg, quan_nirs):
-		eeg_feats = torch.cat([eeg_token, quan_eeg], dim=-1)
-		nirs_feats = torch.cat([nirs_token, quan_nirs], dim=-1)
-		eeg_trans = self.eeg_transform(eeg_feats)
-		nirs_trans = self.nirs_transform(nirs_feats)
-		
-		weights = torch.softmax(torch.stack([self.eeg_weight, self.nirs_weight]), dim=0)
-		fused = weights[0] * eeg_trans + weights[1] * nirs_trans
-		
-		combined = torch.cat([eeg_trans, nirs_trans], dim=-1)
-		outputs = self.classifier(combined)
-		
+		self.classifier = nn.Linear(2 * embed_dim, num_classes)
+		self.pool = nn.AdaptiveAvgPool1d(1)
+
+	def forward(self, quan_eeg_top, quan_nirs_top, quan_eeg_bottom, quan_nirs_bottom):
+		time_dim = quan_eeg_bottom.shape[1]
+		eeg_fusion = self.fusion(quan_eeg_bottom, quan_eeg_top)
+		nirs_fusion = self.fusion(quan_nirs_bottom, quan_nirs_top)
+		nirs_fusion = F.interpolate(nirs_fusion.permute(0, 2, 1), size=time_dim, mode='linear').permute(0, 2, 1)
+
+		features = torch.cat([eeg_fusion, nirs_fusion], dim=-1) # [16, 200, 128]
+		features = self.pool(features.permute(0, 2, 1)).squeeze(-1) # [16, 128]
+		outputs = self.classifier(features)
 		return outputs
 
 
@@ -373,14 +417,10 @@ class EFBook(nn.Module):
 			eeg_token, nirs_token = self.temporal_conv(eeg, nirs)
 			channels = [eeg_token.shape[-1], nirs_token.shape[-1]]
 
-		# print('Stage I: fine-grained representations')
-		self.transformer = Transformer(depth, query_size, key_size, value_size, emb_size, num_heads, channels,
-									   expansion, device, self_dropout, cross_dropout)
-		
-		# print('Stage II: vector quantization')
-		self.quantizer = Quantization(dict_len, emb_size, decay)
-
-		# print('Stage III: feature aggregation & classification')
+		self.pooling = Pooling()
+		self.quantizer_top = Quantization(dict_len=512, emb_size=16)
+		self.quantizer_bottom = Quantization(dict_len=512, emb_size=64)
+		self.fusion = ConditionalFusion()
 		self.classifier = Classifier(emb_size, num_classes)
 
 	def forward(self, eeg, nirs):
@@ -388,22 +428,16 @@ class EFBook(nn.Module):
 		temporal_eeg = temporal_eeg.squeeze(-2).permute(0,2,1)
 		temporal_nirs = temporal_nirs.squeeze(-2).permute(0,2,1) # [16, 200, 64] [16, 50, 64]
 
-		# top_eeg, top_nirs = temporal_eeg[:, :, ::4], temporal_eeg[:, :, ::4]
-		# top_cont = torch.cat([top_eeg, top_nirs], dim=0)
-		# quan_top_eeg, quan_top_nirs = self.quantizer_top(top_cont)
-		# bottom_eeg = quan_top_eeg + temporal_eeg
-		# bottom_nirs = quan_top_nirs + temporal_nirs
-		# bottom_cont = torch.cat([bottom_eeg, bottom_nirs], dim=0)
-		# quan_bottom_eeg, quan_bottom_nirs = self.quantizer_bottom(bottom_cont)
+		eeg_top = self.pooling(temporal_eeg) # [16, 50, 16]
+		nirs_top = self.pooling(temporal_nirs) # [16, 12, 16]
+		quan_eeg_top, quan_nirs_top, quan_loss_top = self.quantizer_top(eeg_top, nirs_top)
 
-		# eeg_token, nirs_token = self.transformer(temporal_eeg, temporal_nirs) # [16, 64]
-
-		cont_features = torch.cat([eeg_token, nirs_token], dim=0) # [32, 64]
-		quan_eeg, quan_nirs, quan_loss = self.quantizer(cont_features)
-
-		outputs = self.classifier(eeg_token, nirs_token, quan_eeg, quan_nirs)
+		eeg_bottom = self.fusion(temporal_eeg, quan_eeg_top)
+		nirs_bottom = self.fusion(temporal_nirs, quan_nirs_top)
+		quan_eeg_bottom, quan_nirs_bottom, quan_loss_bottom = self.quantizer_bottom(eeg_bottom, nirs_bottom)  # [16, 200, 64] [16, 50, 64]
+		outputs = self.classifier(quan_eeg_top, quan_nirs_top, quan_eeg_bottom, quan_nirs_bottom)
 
 		return {
 			'outputs': outputs,
-			'quan_loss': quan_loss
+			'quan_loss': quan_loss_top + quan_loss_bottom
 		}

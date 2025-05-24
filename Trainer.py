@@ -1,4 +1,4 @@
-from Dataloader.Dataloader_Excel import read_excel_eeg, read_excel_nirs
+from Dataloader_Excel import read_excel_eeg, read_excel_nirs
 from EFBook_Hierarchical import EFBook as ef
 
 import numpy as np
@@ -6,11 +6,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import os
-from sklearn.metrics import precision_recall_fscore_support, cohen_kappa_score
-from sklearn.model_selection import KFold
+from sklearn.metrics import precision_score, recall_score, f1_score, cohen_kappa_score
 import pandas as pd
-import random
-from collections import defaultdict
 
 class Trainer:
 	def __init__(self, config):
@@ -66,7 +63,7 @@ class Trainer:
 
 			train_loss = total_loss / len(train_loader)
 			train_acc = total_correct / len(train_loader.dataset)
-			print(f"Training Loss: {train_loss:.2f} | Training Acc: {train_acc:.2f}")
+			# print(f"Training Loss: {train_loss:.2f} | Training Acc: {train_acc:.2f}")
 			
 			return train_loss, train_acc
 	
@@ -98,10 +95,12 @@ class Trainer:
 		
 		loss = total_loss / len(eval_loader)
 		acc = total_correct / len(eval_loader.dataset)
-		precision, recall, f1, _ = precision_recall_fscore_support(all_labels, all_preds, average='weighted')
+		precision = precision_score(all_labels, all_preds, zero_division=0)
+		recall = recall_score(all_labels, all_preds)
+		f1 = f1_score(all_labels, all_preds)
 		kappa = cohen_kappa_score(all_labels, all_preds)
 		
-		print(f"Evaluation Loss: {loss:.2f} | Evaluation Acc: {acc:.2f}")
+		# print(f"Evaluation Loss: {loss:.2f} | Evaluation Acc: {acc:.2f}")
 		return acc, precision, recall, f1, kappa
 
 	def train_subject(self, subject_id, mode):
@@ -109,7 +108,7 @@ class Trainer:
 		nirs, _ = read_excel_nirs(subject_id, mode)
 		eeg, nirs, labels = eeg.to(self.device), nirs.to(self.device), labels.to(self.device)
 		
-		train_size = int(0.6 * len(eeg)) # 60 trials/subject, 60/40 for training/testing
+		train_size = int(0.8 * len(eeg)) # training/testing ratio
 		eval_size = len(eeg) - train_size
 		
 		dataset = torch.utils.data.TensorDataset(eeg, nirs, labels)
@@ -187,7 +186,7 @@ config = {
 	'cls_dropout': 0.5,
 	'num_classes': 2,
 	'batch_size': 16,
-	'num_epochs': 5,
+	'num_epochs': 200,
 	'learning_rate': 1e-3
 }
 

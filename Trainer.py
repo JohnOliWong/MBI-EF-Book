@@ -1,13 +1,14 @@
 from Dataloader_Excel import read_excel_eeg, read_excel_nirs
 from EFBook_Hierarchical import EFBook as ef
+from Metrics import log_metrics as metrics
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import os
 from sklearn.metrics import precision_score, recall_score, f1_score, cohen_kappa_score
 import pandas as pd
+import os
 
 class Trainer:
 	def __init__(self, config):
@@ -103,12 +104,12 @@ class Trainer:
 		# print(f"Evaluation Loss: {loss:.2f} | Evaluation Acc: {acc:.2f}")
 		return acc, precision, recall, f1, kappa
 
-	def train_subject(self, subject_id, mode):
-		eeg, labels = read_excel_eeg(subject_id, mode)
-		nirs, _ = read_excel_nirs(subject_id, mode)
+	def train_subject(self, subject, mode):
+		eeg, labels = read_excel_eeg(subject, mode)
+		nirs, _ = read_excel_nirs(subject, mode)
 		eeg, nirs, labels = eeg.to(self.device), nirs.to(self.device), labels.to(self.device)
 		
-		train_size = int(0.8 * len(eeg)) # training/testing ratio
+		train_size = int(config['ratio'] * len(eeg)) # training/testing ratio
 		eval_size = len(eeg) - train_size
 		
 		dataset = torch.utils.data.TensorDataset(eeg, nirs, labels)
@@ -128,45 +129,11 @@ class Trainer:
 			f1_list.append(f1)
 			kappa_list.append(kappa)
 			
-			print(f"Subject {subject_id} | Epoch {epoch+1}/{self.config['num_epochs']} | "
+			print(f"Subject {subject} | Epoch {epoch+1}/{self.config['num_epochs']} | "
 				f"Train Loss: {train_loss:.2f} | Train Acc: {train_acc:.2f} | "
 				f"Eval Acc: {eval_acc:.2f}")
-
-		mean_acc, std_acc = np.mean(acc_list[-50:]), np.std(acc_list[-50:])
-		mean_precision, std_precision = np.mean(precision_list[-50:]), np.std(precision_list[-50:])
-		mean_recall, std_recall = np.mean(recall_list[-50:]), np.std(recall_list[-50:])
-		mean_f1, std_f1 = np.mean(f1_list[-50:]), np.std(f1_list[-50:])
-		mean_kappa = np.mean(kappa_list[-50:])
-
-		mean_acc, std_acc = mean_acc * 100, std_acc * 100
-		mean_precision, std_precision = mean_precision * 100, std_precision * 100
-		mean_recall, std_recall = mean_recall * 100, std_recall * 100
-		mean_f1, std_f1 = mean_f1 * 100, std_f1 * 100
-
-		log_path = f'Results/log_s{subject_id:2d}.txt'
-		with open(log_path, 'a') as log_file:
-			log_file.write(f'Accuracy: {mean_acc:.2f} ± {std_acc:.2f}\n')
-			log_file.write(f'Precision: {mean_precision:.2f} ± {std_precision:.2f}\n')
-			log_file.write(f'Recall: {mean_recall:.2f} ± {std_recall:.2f}\n')
-			log_file.write(f'F1: {mean_f1:.2f} ± {std_f1:2f}\n')
-			log_file.write(f'Kappa: {mean_kappa:.2f}\n')
-			log_file.write('\n')
-
-		log_excel = 'Results/Log.xlsx'
-		new_row = pd.DataFrame([[mean_acc, std_acc, mean_precision, std_precision, mean_recall, std_recall, mean_f1, std_f1, mean_kappa]], 
-							columns=['Accuracy', 'Std_Accuracy', 'Precision', 'Std_Precision', 'Recall', 'Std_Recall', 'F1', 'Std_F1', 'Kappa'])
-		new_row = new_row.round(2)
-		if not os.path.exists(log_excel):
-			new_row.to_excel(log_excel, index=False, engine='openpyxl')
-		else:
-			with pd.ExcelWriter(log_excel, mode='a', engine='openpyxl', if_sheet_exists='overlay') as writer:
-				if 'Sheet1' in writer.sheets:
-					startrow = writer.sheets['Sheet1'].max_row
-				else:
-					startrow = 0
-				new_row.to_excel(writer, index=False, header=False, startrow=startrow)
-
-		print(f'Subject:{subject_id} Accuracy: {mean_acc:.2f} ± {std_acc:.2f}\n')			
+			
+		metrics(subject, config['log_mode'], acc_list, precision_list, recall_list, f1_list, kappa_list)
 		return
 
 # Hyperparameters
@@ -187,7 +154,9 @@ config = {
 	'num_classes': 2,
 	'batch_size': 16,
 	'num_epochs': 200,
-	'learning_rate': 1e-3
+	'learning_rate': 1e-3,
+	'ratio': 0.6,
+	'log_mode': 1
 }
 
 # Initialize and run trainer

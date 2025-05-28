@@ -235,45 +235,56 @@ class Transformer(nn.Module):
 class Pooling(nn.Module):
 	def __init__(self):
 		super().__init__()
-		self.pool = nn.AvgPool1d(kernel_size=4, stride=4)
-		self.projection = nn.Sequential(
-			nn.Linear(64, 32),
-			nn.ReLU(),
-			nn.Linear(32, 16)
-		)
 
-	def forward(self, x):
+	def forward(self, x, factor):
+		x = x.float()
+		device = x.device
+		bottom_dim = x.shape[2]
+		top_dim = bottom_dim // factor
+		pool = nn.AvgPool1d(kernel_size=factor, stride=factor).to(device)
+		projection = nn.Sequential(
+			nn.Linear(bottom_dim, top_dim),
+			nn.ReLU()
+		).to(device)
+
 		x = x.permute(0, 2, 1)
-		x = self.pool(x)
+		x = pool(x)
 		x = x.permute(0, 2, 1)
-		x = self.projection(x)
+		x = projection(x)
+		x = x.double()
 		return x
 
 
 class ConditionalFusion(nn.Module):
 	def __init__(self):
 		super().__init__()
-		self.projection = nn.Sequential(
-			nn.Linear(16, 32),
-			nn.ReLU(),
-			nn.Linear(32, 64)
-		)
-		self.attention = nn.MultiheadAttention(embed_dim=64, num_heads=64)
 
-	def forward(self, x, e_top):
+	def forward(self, x, e):
+		x = x.float()
+		e = e.float()
+		device = x.device
 		time_dim = x.shape[1]
-		e_top = e_top.permute(0, 2, 1)
-		e_top = F.interpolate(e_top, size=time_dim, mode='linear')
-		e_top = e_top.permute(0, 2, 1)
-		e_top = self.projection(e_top)
+		top_dim = e.shape[2]
+		bottom_dim = x.shape[2]
+		projection = nn.Sequential(
+			nn.Linear(top_dim, bottom_dim),
+			nn.ReLU(),
+		).to(device)
+		attention = nn.MultiheadAttention(embed_dim=bottom_dim, num_heads=bottom_dim).to(device)
 
-		# h_bottom = x + self.projection(e_top)
-		h_bottom, _ = self.attention(
-			query=e_top,
+		e = e.permute(0, 2, 1)
+		e = F.interpolate(e, size=time_dim, mode='linear')
+		e = e.permute(0, 2, 1)
+		e = projection(e)
+
+		# h = x + projection(e)
+		h, _ = attention(
+			query=e,
 			key=x,
 			value=x
 		)
-		return h_bottom
+		h = h.double()
+		return h
 
 
 class Quantization(nn.Module):
@@ -419,6 +430,7 @@ class EFBook(nn.Module):
 
 		self.pooling = Pooling()
 		self.quantizer_top = Quantization(dict_len=512, emb_size=16)
+		self.quantizer_middle = Quantization(dict_len=512, emb_size=32)
 		self.quantizer_bottom = Quantization(dict_len=512, emb_size=64)
 		self.fusion = ConditionalFusion()
 		self.classifier = Classifier(emb_size, num_classes)
@@ -428,16 +440,22 @@ class EFBook(nn.Module):
 		temporal_eeg = temporal_eeg.squeeze(-2).permute(0,2,1)
 		temporal_nirs = temporal_nirs.squeeze(-2).permute(0,2,1) # [16, 200, 64] [16, 50, 64]
 
-		eeg_top = self.pooling(temporal_eeg) # [16, 50, 16]
-		nirs_top = self.pooling(temporal_nirs) # [16, 12, 16]
+		eeg_top = self.pooling(temporal_eeg, 4) # [16, 50, 16]
+		nirs_top = self.pooling(temporal_nirs, 4) # [16, 12, 16]
 		quan_eeg_top, quan_nirs_top, quan_loss_top = self.quantizer_top(eeg_top, nirs_top)
 
-		eeg_bottom = self.fusion(temporal_eeg, quan_eeg_top)
-		nirs_bottom = self.fusion(temporal_nirs, quan_nirs_top)
+		eeg_middle = self.pooling(temporal_eeg, 2) # [16, 100, 32]
+		nirs_middle = self.pooling(temporal_nirs, 2) # [16, 25, 32]
+		eeg_middle = self.fusion(eeg_middle, quan_eeg_top)
+		nirs_middle = self.fusion(nirs_middle, quan_nirs_top)
+		quan_eeg_middle, quan_nirs_middle, quan_loss_middle = self.quantizer_middle(eeg_middle, nirs_middle)
+
+		eeg_bottom = self.fusion(temporal_eeg, quan_eeg_middle)
+		nirs_bottom = self.fusion(temporal_nirs, quan_nirs_middle)
 		quan_eeg_bottom, quan_nirs_bottom, quan_loss_bottom = self.quantizer_bottom(eeg_bottom, nirs_bottom)  # [16, 200, 64] [16, 50, 64]
 		outputs = self.classifier(quan_eeg_top, quan_nirs_top, quan_eeg_bottom, quan_nirs_bottom)
 
 		return {
 			'outputs': outputs,
-			'quan_loss': quan_loss_top + quan_loss_bottom
+			'quan_loss': quan_loss_top + quan_loss_middle + quan_loss_bottom
 		}

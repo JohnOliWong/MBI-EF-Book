@@ -263,7 +263,6 @@ class ConditionalFusion(nn.Module):
 		x = x.float()
 		e = e.float()
 		device = x.device
-		# time_dim = x.shape[1]
 		top_dim = e.shape[1]
 		bottom_dim = x.shape[1]
 		projection = nn.Sequential(
@@ -272,12 +271,7 @@ class ConditionalFusion(nn.Module):
 		).to(device)
 		attention = nn.MultiheadAttention(embed_dim=bottom_dim, num_heads=bottom_dim).to(device)
 
-		# e = e.permute(0, 2, 1)
-		# e = F.interpolate(e, size=time_dim, mode='linear')
-		# e = e.permute(0, 2, 1)
 		e = projection(e)
-
-		# h = x + projection(e)
 		h, _ = attention(
 			query=e,
 			key=x,
@@ -385,26 +379,16 @@ class Quantization(nn.Module):
 
 
 class Classifier(nn.Module):
-	def __init__(self, embed_dim=64, num_heads=4, num_classes=2):
+	def __init__(self, embed_dim=128, num_heads=4, num_classes=2):
 		super().__init__()
-		self.attention = nn.MultiheadAttention(embed_dim, num_heads)
 		self.fusion = ConditionalFusion()
-		self.projection = nn.Sequential(
-			nn.Linear(16, 32),
-			nn.ReLU(),
-			nn.Linear(32, 64)
-		)
 		self.classifier = nn.Linear(2 * embed_dim, num_classes)
-		self.pool = nn.AdaptiveAvgPool1d(1)
 
-	def forward(self, quan_eeg_top, quan_nirs_top, quan_eeg_bottom, quan_nirs_bottom):
-		# time_dim = quan_eeg_bottom.shape[1]
-		eeg_fusion = self.fusion(quan_eeg_bottom, quan_eeg_top)
-		nirs_fusion = self.fusion(quan_nirs_bottom, quan_nirs_top)
-		# nirs_fusion = F.interpolate(nirs_fusion.permute(0, 2, 1), size=time_dim, mode='linear').permute(0, 2, 1)
+	def forward(self, quan_eeg_middle, quan_nirs_middle, quan_eeg_bottom, quan_nirs_bottom):
+		eeg_fusion = self.fusion(quan_eeg_bottom, quan_eeg_middle) # [16, 128]
+		nirs_fusion = self.fusion(quan_nirs_bottom, quan_nirs_middle) # [16, 128]
 
-		features = torch.cat([eeg_fusion, nirs_fusion], dim=-1) # [16, 128]
-		# features = self.pool(features.permute(0, 2, 1)).squeeze(-1) # [16, 128]
+		features = torch.cat([eeg_fusion, nirs_fusion], dim=-1) # [16, 256]
 		outputs = self.classifier(features)
 		return outputs
 
@@ -426,15 +410,18 @@ class EFBook(nn.Module):
 		with torch.no_grad():
 			eeg, nirs = torch.randn(1, 30, 4000), torch.randn(1, 72, 200)
 			eeg_token, nirs_token = self.temporal_conv(eeg, nirs)
-			channels = [eeg_token.shape[-1], nirs_token.shape[-1]]
+			channels = [eeg_token.shape[-1], nirs_token.shape[-1]] # [T', T'']
 
 		self.transformer = Transformer(depth, query_size, key_size, value_size, emb_size, num_heads, channels,
 									   expansion, device, self_dropout, cross_dropout)
 
 		self.pooling = Pooling()
-		self.quantizer_top = Quantization(dict_len=256, emb_size=64)
-		self.quantizer_middle = Quantization(dict_len=256, emb_size=128)
-		self.quantizer_bottom = Quantization(dict_len=256, emb_size=256)
+		self.emb_size = emb_size
+		self.mid_emb = emb_size // 2
+		self.top_emb = emb_size // 4
+		self.quantizer_top = Quantization(dict_len, self.top_emb)
+		self.quantizer_middle = Quantization(dict_len, self.mid_emb)
+		self.quantizer_bottom = Quantization(dict_len, self.emb_size)
 		self.fusion = ConditionalFusion()
 		self.classifier = Classifier(emb_size, num_classes)
 
@@ -458,7 +445,7 @@ class EFBook(nn.Module):
 		eeg_bottom = self.fusion(eeg_token, quan_eeg_middle)
 		nirs_bottom = self.fusion(nirs_token, quan_nirs_middle)
 		quan_eeg_bottom, quan_nirs_bottom, quan_loss_bottom = self.quantizer_bottom(eeg_bottom, nirs_bottom)
-		outputs = self.classifier(quan_eeg_top, quan_nirs_top, quan_eeg_bottom, quan_nirs_bottom)
+		outputs = self.classifier(quan_eeg_middle, quan_nirs_middle, quan_eeg_bottom, quan_nirs_bottom)
 
 		return {
 			'outputs': outputs,

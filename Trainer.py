@@ -1,5 +1,5 @@
-from Dataloader_Excel import read_excel_eeg, read_excel_nirs
-from EFBook_Hierarchical import EFBook as ef
+from Dataloader.Dataloader_Excel import read_excel_eeg, read_excel_nirs
+from EFBook_Trans_3L import EFBook as ef
 from Metrics import log_metrics as metrics
 
 import numpy as np
@@ -137,12 +137,13 @@ class Trainer:
 		return
 
 # Hyperparameters
+# the correlation between Q, K, V and embedding size
 config = {
 	'depth': 4,
-	'query_size': 64,
-	'key_size': 64,
-	'value_size': 64,
-	'emb_size': 256,
+	'query_size': 128,
+	'key_size': 128,
+	'value_size': 128,
+	'emb_size': 128,
 	'dict_len': 256,
 	'decay': 0.99,
 	'num_heads': 4,
@@ -153,7 +154,7 @@ config = {
 	'cls_dropout': 0.5,
 	'num_classes': 2,
 	'batch_size': 16,
-	'num_epochs': 200,
+	'num_epochs': 10,
 	'learning_rate': 1e-3,
 	'ratio': 0.6,
 	'log_mode': 1

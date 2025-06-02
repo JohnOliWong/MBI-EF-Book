@@ -453,7 +453,7 @@ class EFBook(nn.Module):
 		eeg_bottom = self.fusion(temporal_eeg, quan_eeg_middle)
 		nirs_bottom = self.fusion(temporal_nirs, quan_nirs_middle)
 		quan_eeg_bottom, quan_nirs_bottom, quan_loss_bottom = self.quantizer_bottom(eeg_bottom, nirs_bottom)  # [16, 200, 64] [16, 50, 64]
-		outputs = self.classifier(quan_eeg_top, quan_nirs_top, quan_eeg_bottom, quan_nirs_bottom)
+		outputs = self.classifier(quan_eeg_middle, quan_nirs_middle, quan_eeg_bottom, quan_nirs_bottom)
 
 		return {
 			'outputs': outputs,

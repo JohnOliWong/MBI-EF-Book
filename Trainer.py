@@ -1,5 +1,5 @@
 from Dataloader.Dataloader_Excel import read_excel_eeg, read_excel_nirs
-from EFBook_Trans_3L import EFBook as ef
+from EFBook_fNIRSNet import EFBook as ef
 from Metrics import log_metrics as metrics
 
 import numpy as np
@@ -107,6 +107,8 @@ class Trainer:
 	def train_subject(self, subject, mode):
 		eeg, labels = read_excel_eeg(subject, mode)
 		nirs, _ = read_excel_nirs(subject, mode)
+		eeg = eeg.unsqueeze(1)
+		nirs = nirs.unsqueeze(1)
 		eeg, nirs, labels = eeg.to(self.device), nirs.to(self.device), labels.to(self.device)
 		
 		train_size = int(config['ratio'] * len(eeg)) # training/testing ratio
@@ -154,7 +156,7 @@ config = {
 	'cls_dropout': 0.5,
 	'num_classes': 2,
 	'batch_size': 16,
-	'num_epochs': 10,
+	'num_epochs': 200,
 	'learning_rate': 1e-3,
 	'ratio': 0.6,
 	'log_mode': 1

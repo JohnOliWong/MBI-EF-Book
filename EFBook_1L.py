@@ -302,44 +302,6 @@ class Quantization(nn.Module):
 			self.status[inactive] = 0
 
 
-# class Classifier(nn.Module):
-#     def __init__(self, emb_size=64, num_classes=2):
-#         super().__init__()
-#         self.eeg_weight = nn.Parameter(torch.ones(1))
-#         self.nirs_weight = nn.Parameter(torch.ones(1))
-		
-#         self.eeg_proj = nn.Linear(emb_size, emb_size)
-#         self.nirs_proj = nn.Linear(emb_size, emb_size)
-		
-#         self.classifier = nn.Sequential(
-#             nn.Linear(emb_size * 2, 128),
-#             nn.ReLU(),
-#             nn.Linear(128, num_classes)
-#         )
-	
-#     def forward(self, batch_eeg, batch_nirs, quan_eeg, quan_nirs):
-#         # batch_eeg: [16, 64]
-#         # quan_eeg: [16, 64]
-#         # batch_nirs: [16, 64]
-#         # quan_nirs: [16, 64]
-		
-#         eeg_cat = torch.cat([batch_eeg, quan_eeg], dim=-1)  # [16, 128]
-#         eeg_pooled = eeg_cat.mean(dim=1)  # [B, 128]
-#         eeg_feat = self.eeg_proj(eeg_pooled)  # [B, 64]
-		
-#         nirs_cat = torch.cat([batch_nirs, quan_nirs], dim=-1)  # [16, 128]
-#         nirs_pooled = nirs_cat.mean(dim=1)  # [B, 128]
-#         nirs_feat = self.nirs_proj(nirs_pooled)  # [B, 64]
-		
-#         weights = torch.softmax(torch.stack([self.eeg_weight, self.nirs_weight]), dim=0)
-#         fused = weights[0] * eeg_feat + weights[1] * nirs_feat  # [B, 64]
-		
-#         combined = torch.cat([eeg_feat, nirs_feat], dim=-1)  # [B, 128]
-#         outputs = self.classifier(combined)  # [B, num_classes]
-		
-#         return outputs
-
-
 class Classifier(nn.Module):
 	def __init__(self, emb_size=64, num_classes=2):
 		super().__init__()

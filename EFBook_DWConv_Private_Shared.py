@@ -46,8 +46,8 @@ class fNIRSNet(torch.nn.Module):
 	def forward(self, x):
 		x = self.act(self.bn1(self.conv1(x)))
 		x = self.act(self.bn2(self.conv2(x)))
-		# x = x.view(x.size()[0], -1)
-		# x = self.fc(x)
+		x = x.view(x.size()[0], -1)
+		x = self.fc(x)
 		return x
 
 
@@ -97,7 +97,7 @@ class ConditionalFusion(nn.Module):
 		return h
 
 
-class ResidualQuantization(nn.Module):
+class Quantization(nn.Module):
 	'''
 	args:
 	cont_features: input continuous concatenated EEG-fNIRS features [B, T, E]
@@ -107,102 +107,76 @@ class ResidualQuantization(nn.Module):
 	m: summation of continuous features matched to the current codeword [D, E]
 	status: reflect if a codeword is active or not [D,]
 	'''
-	def __init__(self, dict_len, emb_size, num_quantizers=3, decay=0.99, ot_weight=1.0):
+	def __init__(self, dict_len, emb_size, decay=0.99, ot_weight=1.0):
 		super().__init__()
 		self.dict_len = dict_len
 		self.emb_size = emb_size
-		self.num_quantizers = num_quantizers
 		self.decay = decay
 		self.ot_weight = ot_weight
 
 		# initiate subject-specific, modality-invariant codebook
-		self.codebooks = nn.ParameterList([
-										nn.Parameter(torch.randn(dict_len, emb_size))
-										for _ in range(num_quantizers)
-										])
-		self.register_buffer('N', torch.ones(num_quantizers, dict_len))
-		self.register_buffer('m', torch.stack([codebook.clone() for codebook in self.codebooks]))
-		self.register_buffer('status', torch.zeros(num_quantizers, dict_len))
+		self.codebook = nn.Parameter(torch.randn(dict_len, emb_size))
+		self.register_buffer('N', torch.ones(dict_len))
+		self.register_buffer('m', self.codebook.clone())
+		self.register_buffer('status', torch.zeros(dict_len))
 
-	def forward(self, x, y):
-		batch_size = x.shape[0]
-		cont_features = torch.cat([x, y], dim=0) # [2 * B, E]
-		residual = cont_features
-		quan_total = 0
-		codebook_loss = 0
-		all_idx = []
-
-		for i in range(self.num_quantizers):
-			# compute L2-distance between each feature-codeword pair
-			distances = torch.cdist(cont_features, self.codebooks[i])
-			quan_idx = torch.argmin(distances, dim=-1)  # [2 * B]
-			quan_token = self.codebooks[i].data[quan_idx]  # [2 * B, E]
-			# quan_token = cont_features + (quan_token - cont_features).detach()
-
-			# residual = residual + (quan_token - residual).detach()
-			residual = residual - quan_token
-			quan_total = quan_total + quan_token
-			all_idx.append(quan_idx)
-			
-			# codebook variables are only updated during training
-			if self.training:
-				self.codebook_update(i, residual + quan_token.detach(), quan_idx)
-				# self.codebook_update(i, cont_features, quan_idx)
-			
-			# difference between continuous and discrete features
-			# codebook_loss += F.mse_loss(quan_token.detach(), residual + quan_token.detach())
-			codebook_loss += F.mse_loss(quan_token, residual.detach())
+	def forward(self, cont_features):
+		# compute L2-distance between each feature-codeword pair
+		distances = torch.cdist(cont_features, self.codebook)
+		quan_idx = torch.argmin(distances, dim=-1)  # [2 * B]
+		quan_token = self.codebook.data[quan_idx]  # [2 * B, E]
+		quan_token = cont_features + (quan_token - cont_features).detach()
 		
-		# quan_total = cont_features + (quan_total - cont_features).detach() # quan_total corresponds to quan_token for vq with single codebook
-		quan_total = cont_features - residual
-		quan_eeg = quan_total[:batch_size, :]
-		quan_nirs = quan_total[batch_size:, :]
+		# codebook variables are only updated during training
+		if self.training:
+			self.codebook_update(cont_features, quan_idx)
 
+		# difference between continuous and discrete features
+		quan_loss = F.mse_loss(quan_token.detach(), cont_features)
 		# difference between quantized EEG and fNIRS features
-		ot_loss = self.ot_loss(cont_features, all_idx[-1])
-		codebook_loss += self.ot_weight * ot_loss
-
-		return quan_eeg, quan_nirs, codebook_loss
+		ot_loss = self.ot_loss(cont_features, quan_idx)
+		codebook_loss = quan_loss + ot_loss
+		return quan_token, codebook_loss
 	
-	def codebook_update(self, level, features, indices):
+	def codebook_update(self, features, indices):
 		with torch.no_grad():
 			features = features.float()
 			# converts discrete codeword indices to sparse matrix
-			one_hot = F.one_hot(indices, num_classes=len(self.codebooks[0])).float()  # [2 * B, D]
+			one_hot = F.one_hot(indices, num_classes=len(self.codebook)).float()  # [2 * B, D]
 			counts = one_hot.sum(dim=[0])  # [D]
 			matched = (counts > 0)
 			
 			if matched.any(): # .any() returns bool variables
 				# summation of fine-grained representations matched to the corresponding codeword
 				sum_features = torch.einsum('nc,nd->dc', features, one_hot) # [D, E]
-				self.N[level, matched] = self.decay * self.N[level, matched] + (1-self.decay) * counts[matched]
-				self.m[level, matched] = self.decay * self.m[level, matched] + (1-self.decay) * sum_features[matched, :]
-				self.codebooks[level].data[matched] = self.m[level, matched] / self.N[level, matched].unsqueeze(1)
-				self.status[level, matched] = 0
+				self.N[matched] = self.decay * self.N[matched] + (1-self.decay) * counts[matched]
+				self.m[matched] = self.decay * self.m[matched] + (1-self.decay) * sum_features[matched, :]
+				self.codebook.data[matched] = self.m[matched] / self.N[matched].unsqueeze(1)
+				self.status[matched] = 0
 			
 			inactive = ~matched
-			self.status[level, inactive] += 1
-			if (self.status[level] >= 100).any():
-				self.codeword_replace(level)
+			self.status[inactive] += 1
+			if (self.status >= 100).any():
+				self.codeword_replace()
 
-	def codeword_replace(self, level):
-		inactive = (self.status[level] >= 100)
-		if inactive.any() and (self.N[level] > 1).any():
-			active_idx = torch.where(self.N[level] > 1)[0]
+	def codeword_replace(self):
+		inactive = (self.status >= 100)
+		if inactive.any() and (self.N > 1).any():
+			active_idx = torch.where(self.N > 1)[0]
 			random_idx = random.choice(active_idx.cpu().numpy())
 
-			replace_codeword = self.codebooks[level].data[random_idx].clone()
-			self.codebooks[level].data[inactive] = replace_codeword
-			self.N[level, inactive] = 1
-			self.m[level, inactive] = self.codebooks[level].data[inactive].clone()
-			self.status[level, inactive] = 0
+			replace_codeword = self.codebook.data[random_idx].clone()
+			self.codebook.data[inactive] = replace_codeword
+			self.N[inactive] = 1
+			self.m[inactive] = self.codebook.data[inactive].clone()
+			self.status[inactive] = 0
 
 	def ot_loss(self, features, indices):
-		one_hot = F.one_hot(indices, num_classes=len(self.codebooks[0])).float()
+		one_hot = F.one_hot(indices, num_classes=len(self.codebook)).float()
 		# compute the probability of each codeword being matched
 		codebook_probs = one_hot.mean(dim=[0])
 		# the ideal situation is all codewords have the same chance to be used
-		target_probs = torch.ones_like(codebook_probs) / len(self.codebooks[0])
+		target_probs = torch.ones_like(codebook_probs) / len(self.codebook)
 		# utilize KL-divergence to make the actual codeword distribution align with the ideal distribution
 		ot_loss = F.kl_div(
 			input=torch.log(codebook_probs + 1e-6),
@@ -212,32 +186,52 @@ class ResidualQuantization(nn.Module):
 		return ot_loss
 
 
+class AttentionFusion(nn.Module):
+	def __init__(self, emb_size):
+		super(AttentionFusion, self).__init__()
+		self.weight = nn.Parameter(torch.randn(emb_size, 1), requires_grad=True)
+		self.softmax = nn.Softmax(dim=-1)
+		self.alpha = None
+
+	def forward(self, out):
+		o = torch.cat([i @ self.weight for i in out], dim=-1) # [16, 2] or [16]
+		if o.dim() == 1:
+			o = o.unsqueeze(1)
+		self.alpha = self.softmax(o)
+		outputs = sum([i * self.alpha[:, index].unsqueeze(1) for index, i in enumerate(out)])
+		return outputs
+
+
 class Classifier(nn.Module):
 	def __init__(self, emb_size=128, num_classes=2):
 		super().__init__()
-		self.eeg_weight = nn.Parameter(torch.ones(1))
-		self.nirs_weight = nn.Parameter(torch.ones(1))
 		
-		self.eeg_transform = nn.Linear(emb_size * 2, emb_size)
-		self.nirs_transform = nn.Linear(emb_size * 2, emb_size)
-		
-		self.classifier = nn.Sequential(
-			nn.Linear(emb_size * 2, 128),
+		self.weight_eeg = AttentionFusion(emb_size)
+		self.weight_nirs = AttentionFusion(emb_size)
+		self.weight_fusion = AttentionFusion(emb_size)
+		self.weights = nn.Parameter(torch.Tensor([1., 1., 0.5]), requires_grad=True)
+
+		self.projector = nn.Sequential(
+			nn.Linear(emb_size, emb_size // 2),
 			nn.ReLU(),
-			nn.Linear(128, num_classes)
+			nn.Linear(emb_size // 2, num_classes),
+			nn.ReLU()
 		)
 	
 	def forward(self, eeg_token, nirs_token, quan_eeg, quan_nirs):
-		eeg_feats = torch.cat([eeg_token, quan_eeg], dim=-1)
-		nirs_feats = torch.cat([nirs_token, quan_nirs], dim=-1)
-		eeg_trans = self.eeg_transform(eeg_feats)
-		nirs_trans = self.nirs_transform(nirs_feats)
-		
-		weights = torch.softmax(torch.stack([self.eeg_weight, self.nirs_weight]), dim=0)
-		fused = weights[0] * eeg_trans + weights[1] * nirs_trans
-		
-		combined = torch.cat([eeg_trans, nirs_trans], dim=-1)
-		outputs = self.classifier(combined)
+		eeg_fusion = self.weight_eeg([eeg_token, quan_eeg])
+		nirs_fusion = self.weight_nirs([nirs_token, quan_nirs])
+		sum_fusion = eeg_token + nirs_token + quan_eeg + quan_nirs
+
+		w1 = torch.exp(self.weights[0]) / torch.sum(torch.exp(self.weights))
+		w2 = torch.exp(self.weights[1]) / torch.sum(torch.exp(self.weights))
+		w3 = torch.exp(self.weights[2]) / torch.sum(torch.exp(self.weights))
+
+		w1 = 1.0
+		w2 = 0.0
+		w3 = 0.0
+
+		outputs = w1 * self.projector(eeg_fusion) + w2 * self.projector(nirs_fusion) + w3 * self.projector(sum_fusion)
 		
 		return outputs
 
@@ -259,7 +253,12 @@ class EFBook(nn.Module):
 		self.interpolation = torch.nn.Linear(8, emb_size)
 
 		self.pooling = Pooling()
-		self.quantizer = ResidualQuantization(dict_len, emb_size)
+		self.emb_size = emb_size
+		self.mid_emb = emb_size // 2
+		self.top_emb = emb_size // 4
+		self.eeg_quantizer = Quantization(dict_len, self.emb_size)
+		self.nirs_quantizer = Quantization(dict_len, self.emb_size)
+		self.fusion_quantizer = Quantization(dict_len, self.emb_size)
 		self.fusion = ConditionalFusion()
 		self.classifier = Classifier(emb_size, num_classes)
 
@@ -274,8 +273,16 @@ class EFBook(nn.Module):
 		nirs_token = nirs_token.squeeze()
 		nirs_token = self.interpolation(nirs_token) # [B, E]
 
-		quan_eeg, quan_nirs, quan_loss = self.quantizer(eeg_token, nirs_token)
+		batch_size = eeg_token.shape[0]
+		quan_eeg, eeg_quan_loss = self.eeg_quantizer(eeg_token)
+		quan_nirs, nirs_quan_loss = self.nirs_quantizer(nirs_token)
+		quan_features = torch.cat([quan_eeg, quan_nirs], dim=0) # [2 * B, E]
+		quan_fusion, fusion_quan_loss = self.fusion_quantizer(quan_features)
+		quan_eeg, quan_nirs = quan_fusion[:batch_size, :], quan_fusion[batch_size:, :]
 		outputs = self.classifier(eeg_token, nirs_token, quan_eeg, quan_nirs)
+
+		lw_1, lw_2, lw_3 = 1.0, 0.0, 0.0
+		quan_loss = lw_1 * eeg_quan_loss + lw_2 * nirs_quan_loss + lw_3 * fusion_quan_loss
 
 		# aggregation by given weights
 		# quan_loss = 0

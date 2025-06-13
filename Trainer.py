@@ -1,5 +1,4 @@
-from Dataloader.Dataloader_Excel import read_excel_eeg, read_excel_nirs
-from EFBook_fNIRSNet import EFBook as ef
+from EFBook_DWConv_1L_Res import EFBook as ef
 from Metrics import log_metrics as metrics
 
 import numpy as np
@@ -9,6 +8,10 @@ import torch.optim as optim
 from sklearn.metrics import precision_score, recall_score, f1_score, cohen_kappa_score
 import pandas as pd
 import os
+import pickle
+
+torch.manual_seed(42)
+torch.cuda.manual_seed(42)
 
 class Trainer:
 	def __init__(self, config):
@@ -34,11 +37,13 @@ class Trainer:
 		).to(self.device).to(torch.float64)
 
 		self.optimizer = optim.Adam(self.model.parameters(), lr=config['learning_rate'])
+		self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min')
 		self.criterion = nn.CrossEntropyLoss()
 
 		os.makedirs('Results', exist_ok=True)
 	
-	def train_epoch(self, train_loader):
+	def train_epoch(self, epoch, train_loader):
+		epoch += 1
 		self.model.train()
 		total_correct, total_loss = 0, 0
 
@@ -47,7 +52,6 @@ class Trainer:
 			batch_nirs = batch_nirs.to(self.device, dtype=torch.float64)
 			batch_labels = batch_labels.to(self.device)
 			
-			self.optimizer.zero_grad()
 			model_output = self.model(batch_eeg, batch_nirs)
 			outputs = model_output['outputs']
 			quan_loss = model_output['quan_loss']
@@ -55,6 +59,7 @@ class Trainer:
 			quan_lambda = 0.1
 			cls_loss = self.criterion(outputs, batch_labels)
 			loss = cls_loss + quan_loss * quan_lambda
+			self.optimizer.zero_grad()
 			loss.backward()
 			self.optimizer.step()
 			
@@ -102,11 +107,20 @@ class Trainer:
 		kappa = cohen_kappa_score(all_labels, all_preds)
 		
 		# print(f"Evaluation Loss: {loss:.2f} | Evaluation Acc: {acc:.2f}")
-		return acc, precision, recall, f1, kappa
+		return loss, acc, precision, recall, f1, kappa
 
 	def train_subject(self, subject, mode):
-		eeg, labels = read_excel_eeg(subject, mode)
-		nirs, _ = read_excel_nirs(subject, mode)
+		if mode == 0:
+			data_root = config['mi_root'] + str(subject) + '.pkl'
+		elif mode == 1:
+			data_root = config['ma_root'] + str(subject) + '.pkl'
+		with open(data_root, 'rb') as f:
+			data = pickle.load(f)
+		
+		eeg = data['eeg']
+		nirs = data['nirs']
+		labels = data['labels']
+		
 		eeg = eeg.unsqueeze(1)
 		nirs = nirs.unsqueeze(1)
 		eeg, nirs, labels = eeg.to(self.device), nirs.to(self.device), labels.to(self.device)
@@ -122,8 +136,8 @@ class Trainer:
 		acc_list, precision_list, recall_list, f1_list, kappa_list = [], [], [], [], []
 		
 		for epoch in range(self.config['num_epochs']):
-			train_loss, train_acc = self.train_epoch(train_loader)
-			eval_acc, precision, recall, f1, kappa = self.evaluate_epoch(eval_loader)
+			train_loss, train_acc = self.train_epoch(epoch, train_loader)
+			eval_loss, eval_acc, precision, recall, f1, kappa = self.evaluate_epoch(eval_loader)
 			
 			acc_list.append(eval_acc)
 			precision_list.append(precision)
@@ -133,7 +147,7 @@ class Trainer:
 			
 			print(f"Subject {subject} | Epoch {epoch+1}/{self.config['num_epochs']} | "
 				f"Train Loss: {train_loss:.2f} | Train Acc: {train_acc:.2f} | "
-				f"Eval Acc: {eval_acc:.2f}")
+				f"Eval Loss: {eval_loss:.2f} | Eval Acc: {eval_acc:.2f}")
 			
 		metrics(subject, config['log_mode'], acc_list, precision_list, recall_list, f1_list, kappa_list)
 		return
@@ -159,7 +173,9 @@ config = {
 	'num_epochs': 200,
 	'learning_rate': 1e-3,
 	'ratio': 0.6,
-	'log_mode': 1
+	'log_mode': 1,
+	'mi_root': '../../Dataset/EF-MI-MA/EF-PKL-MI/',
+	'ma_root': '../../Dataset/EF-MI-MA/EF-PKL-MA/',
 }
 
 # Initialize and run trainer

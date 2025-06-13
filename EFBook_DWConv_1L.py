@@ -249,24 +249,29 @@ class EFBook(nn.Module):
 		self.classifier = Classifier(emb_size, num_classes)
 
 	def forward(self, eeg, nirs):
+		# encoder
 		eeg_token = self.eeg_conv(eeg) # [16, 8, 1, 1] = [B, num_DWConv, 1, 1]
 		nirs_token = self.nirs_conv(nirs) # [16, 8, 1, 1]
 
-		alpha = 0.5
-		outputs = alpha * eeg_token + (1 - alpha) * nirs_token
-		
+		# if the output token shape is [16, 2, 1, 1], check that if the full-connection layer has been annoted correctly
+		eeg_token = eeg_token.squeeze()
+		eeg_token = self.interpolation(eeg_token)
+		nirs_token = nirs_token.squeeze()
+		nirs_token = self.interpolation(nirs_token) # [B, E]
+
+		quan_eeg, quan_nirs, quan_loss = self.quantizer(eeg_token, nirs_token)
+		outputs = self.classifier(eeg_token, nirs_token, quan_eeg, quan_nirs)
+
+		# aggregation by given weights
+		# quan_loss = 0
+		# alpha = 0.5
+		# outputs = alpha * eeg_token + (1 - alpha) * nirs_token
+
+		# aggregation by attention weights
+		# quan_loss = 0
 		# combined = torch.cat([eeg_token.unsqueeze(1), nirs_token.unsqueeze(1)], dim=1)  # [B, 2, num_classes]
 		# attn_weights = torch.softmax(combined.mean(dim=-1), dim=1)  # [B, 2]
 		# outputs = (attn_weights.unsqueeze(-1) * combined).sum(dim=1)  # [B, num_classes]
-		quan_loss = 0
-		
-		# eeg_token = eeg_token.squeeze()
-		# eeg_token = self.interpolation(eeg_token)
-		# nirs_token = nirs_token.squeeze()
-		# nirs_token = self.interpolation(nirs_token) # [B, E]
-
-		# quan_eeg, quan_nirs, quan_loss = self.quantizer(eeg_token, nirs_token)
-		# outputs = self.classifier(eeg_token, nirs_token, quan_eeg, quan_nirs)
 
 		return {
 			'outputs': outputs,

@@ -1,4 +1,4 @@
-from EFBook_DWConv_1L_Res import EFBook as ef
+from EFBook_DWConv_PS_V1 import EFBook as ef
 from Metrics import log_metrics as metrics
 
 import numpy as np
@@ -114,6 +114,8 @@ class Trainer:
 			data_root = config['mi_root'] + str(subject) + '.pkl'
 		elif mode == 1:
 			data_root = config['ma_root'] + str(subject) + '.pkl'
+		elif mode == 2:
+			data_root = config['wg_root'] + f'subject:02d' + '.pkl'
 		with open(data_root, 'rb') as f:
 			data = pickle.load(f)
 		
@@ -156,11 +158,11 @@ class Trainer:
 # the correlation between Q, K, V and embedding size
 config = {
 	'depth': 4,
-	'query_size': 128,
-	'key_size': 128,
-	'value_size': 128,
-	'emb_size': 128,
-	'dict_len': 256,
+	'query_size': 64,
+	'key_size': 64,
+	'value_size': 64,
+	'emb_size': 64,
+	'dict_len': 64,
 	'decay': 0.99,
 	'num_heads': 4,
 	'expansion': 2,
@@ -176,6 +178,7 @@ config = {
 	'log_mode': 1,
 	'mi_root': '../../Dataset/EF-MI-MA/EF-PKL-MI/',
 	'ma_root': '../../Dataset/EF-MI-MA/EF-PKL-MA/',
+	'wg_root': '../../Dataset/EF-WG/WG/',
 }
 
 # Initialize and run trainer
@@ -183,4 +186,4 @@ trainer = Trainer(config)
 for subject in range(29):
 	subject += 1
 	print(f"\n=== Subject {subject} ===")
-	results = trainer.train_subject(subject, mode=0) # 0 = MI, 1 = MA
+	results = trainer.train_subject(subject, mode=0) # 0 = MI, 1 = MA, 2 = WG

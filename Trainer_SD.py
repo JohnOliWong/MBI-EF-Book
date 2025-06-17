@@ -1,10 +1,12 @@
 from EFBook_DWConv_PS_V2 import EFBook as ef
 from Metrics import log_metrics as metrics
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from sklearn.metrics import precision_score, recall_score, f1_score, cohen_kappa_score
+import pandas as pd
 import os
 import pickle
 
@@ -40,11 +42,17 @@ class Trainer:
 
 		os.makedirs('Results', exist_ok=True)
 	
+	def z_score(self, signal, eps=1e-6):
+		mean = signal.mean(dim=(0,2), keepdim=True)
+		std = signal.std(dim=(0,2), keepdim=True)
+		std = torch.max(std, torch.tensor(eps, device=signal.device))
+		signal = (signal - mean) / std
+		return signal	
+	
 	def train_epoch(self, epoch, train_loader):
 		epoch += 1
 		self.model.train()
 		total_correct, total_loss = 0, 0
-		code_use = 0
 
 		for batch_eeg, batch_nirs, batch_labels in train_loader:
 			batch_eeg = batch_eeg.to(self.device, dtype=torch.float64)
@@ -69,12 +77,11 @@ class Trainer:
 		train_loss = total_loss / len(train_loader)
 		train_acc = total_correct / len(train_loader.dataset)
 		
-		return train_loss, train_acc, code_use
+		return train_loss, train_acc
 	
 	def evaluate_epoch(self, eval_loader):
 		self.model.eval()
 		total_loss, total_correct = 0, 0
-		code_use = 0
 		all_preds, all_labels = [], []
 		
 		with torch.no_grad():
@@ -105,7 +112,7 @@ class Trainer:
 		f1 = f1_score(all_labels, all_preds)
 		kappa = cohen_kappa_score(all_labels, all_preds)
 		
-		return loss, code_use, acc, precision, recall, f1, kappa
+		return loss, acc, precision, recall, f1, kappa	
 
 	def train_subject(self, subject, mode):
 		if mode == 0:
@@ -113,13 +120,16 @@ class Trainer:
 		elif mode == 1:
 			data_root = config['ma_root'] + str(subject) + '.pkl'
 		elif mode == 2:
-			data_root = config['wg_root'] + f'subject:02d' + '.pkl'
+			data_root = config['wg_root'] + f'subject:{subject:02d}' + '.pkl'
 		with open(data_root, 'rb') as f:
 			data = pickle.load(f)
 		
 		eeg = data['eeg']
 		nirs = data['nirs']
 		labels = data['labels']
+
+		eeg = self.z_score(eeg)
+		nirs = self.z_score(nirs)
 		
 		eeg = eeg.unsqueeze(1)
 		nirs = nirs.unsqueeze(1)
@@ -136,8 +146,8 @@ class Trainer:
 		acc_list, precision_list, recall_list, f1_list, kappa_list = [], [], [], [], []
 		
 		for epoch in range(self.config['num_epochs']):
-			train_loss, train_acc, _ = self.train_epoch(epoch, train_loader)
-			eval_loss, _, eval_acc, precision, recall, f1, kappa = self.evaluate_epoch(eval_loader)
+			train_loss, train_acc = self.train_epoch(epoch, train_loader)
+			eval_loss, eval_acc, precision, recall, f1, kappa = self.evaluate_epoch(eval_loader)
 			
 			acc_list.append(eval_acc)
 			precision_list.append(precision)
@@ -148,18 +158,18 @@ class Trainer:
 			print(f"Subject {subject} | Epoch {epoch+1}/{self.config['num_epochs']} | "
 				f"Train Loss: {train_loss:.2f} | Train Acc: {train_acc:.2f} | "
 				f"Eval Loss: {eval_loss:.2f} | Eval Acc: {eval_acc:.2f}")
-		
-		metrics(subject, config['log_mode'], acc_list, precision_list, recall_list, f1_list, kappa_list)
+			
+		metrics(subject, config['log_name'], config['log_mode'], acc_list, precision_list, recall_list, f1_list, kappa_list)
 		return
 
 # Hyperparameters
 # the correlation between Q, K, V and embedding size
 config = {
 	'depth': 4,
-	'query_size': 64,
-	'key_size': 64,
-	'value_size': 64,
-	'emb_size': 64,
+	'query_size': 128,
+	'key_size': 128,
+	'value_size': 128,
+	'emb_size': 128,
 	'dict_len': 128,
 	'decay': 0.99,
 	'num_heads': 4,
@@ -173,6 +183,7 @@ config = {
 	'num_epochs': 200,
 	'learning_rate': 1e-3,
 	'ratio': 0.6,
+	'log_name': 11,
 	'log_mode': 1,
 	'quan_lambda': 0.1,
 	'mi_root': '../../Dataset/EF-MI-MA/EF-PKL-MI/',

@@ -57,7 +57,7 @@ class Trainer:
 			outputs = model_output['outputs']
 			quan_loss = model_output['quan_loss']
 
-			quan_lambda = 0.1
+			quan_lambda = config['quan_lambda']
 			cls_loss = self.criterion(outputs, batch_labels)
 			loss = cls_loss + quan_loss * quan_lambda
 			self.optimizer.zero_grad()
@@ -68,11 +68,10 @@ class Trainer:
 			total_correct += (preds == batch_labels).sum().item()
 			total_loss += loss.item()
 
-			train_loss = total_loss / len(train_loader)
-			train_acc = total_correct / len(train_loader.dataset)
-			# print(f"Training Loss: {train_loss:.2f} | Training Acc: {train_acc:.2f}")
-			
-			return train_loss, train_acc
+		train_loss = total_loss / len(train_loader)
+		train_acc = total_correct / len(train_loader.dataset)
+		
+		return train_loss, train_acc
 	
 	def evaluate_epoch(self, eval_loader):
 		self.model.eval()
@@ -89,7 +88,7 @@ class Trainer:
 				outputs = model_output['outputs']
 				quan_loss = model_output['quan_loss']
 				
-				quan_lambda = 0.1
+				quan_lambda = config['quan_lambda']
 				cls_loss = self.criterion(outputs, eval_labels)
 				loss = cls_loss + quan_loss * quan_lambda
 				total_loss += loss.item()
@@ -107,7 +106,6 @@ class Trainer:
 		f1 = f1_score(all_labels, all_preds)
 		kappa = cohen_kappa_score(all_labels, all_preds)
 		
-		# print(f"Evaluation Loss: {loss:.2f} | Evaluation Acc: {acc:.2f}")
 		return loss, acc, precision, recall, f1, kappa
 
 	def train_subject(self, subject, mode):
@@ -139,7 +137,7 @@ class Trainer:
 				f"Train Loss: {train_loss:.2f} | Train Acc: {train_acc:.2f} | "
 				f"Eval Loss: {eval_loss:.2f} | Eval Acc: {eval_acc:.2f}")
 			
-		metrics(subject, config['log_mode'], acc_list, precision_list, recall_list, f1_list, kappa_list)
+		metrics(subject, config['log_name'], config['log_mode'], acc_list, precision_list, recall_list, f1_list, kappa_list)
 		return
 
 # Hyperparameters
@@ -150,7 +148,7 @@ config = {
 	'key_size': 128,
 	'value_size': 128,
 	'emb_size': 128,
-	'dict_len': 2048,
+	'dict_len': 128,
 	'decay': 0.99,
 	'num_heads': 4,
 	'expansion': 2,
@@ -160,10 +158,12 @@ config = {
 	'cls_dropout': 0.5,
 	'num_classes': 2,
 	'batch_size': 128,
-	'num_epochs': 10,
+	'num_epochs': 200,
 	'learning_rate': 1e-3,
 	'ratio': 0.6,
+	'log_name': 11,
 	'log_mode': 1,
+	'quan_lambda': 0.1,
 	'mi_root': '../../Dataset/EF-MI-MA/EF-PKL-MI/',
 	'ma_root': '../../Dataset/EF-MI-MA/EF-PKL-MA/',
 	'wg_root': '../../Dataset/EF-WG/WG/',

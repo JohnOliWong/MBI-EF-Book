@@ -136,7 +136,10 @@ class Quantization(nn.Module):
 		# difference between quantized EEG and fNIRS features
 		ot_loss = self.ot_loss(cont_features, quan_idx)
 		codebook_loss = quan_loss + ot_loss
-		return quan_token, codebook_loss
+		# code_use = (self.status > 0).float().mean().item()
+		mask = (self.status == 0)
+		code_use = self.status.sum().item() / mask.numel()
+		return quan_token, codebook_loss, code_use
 	
 	def codebook_update(self, features, indices):
 		with torch.no_grad():
@@ -270,10 +273,10 @@ class EFBook(nn.Module):
 		nirs_token = self.interpolation(nirs_token) # [B, E]
 
 		batch_size = eeg_token.shape[0]
-		quan_eeg, eeg_quan_loss = self.eeg_quantizer(eeg_token)
-		quan_nirs, nirs_quan_loss = self.nirs_quantizer(nirs_token)
+		quan_eeg, eeg_quan_loss, eeg_code_use = self.eeg_quantizer(eeg_token)
+		quan_nirs, nirs_quan_loss, nirs_code_use = self.nirs_quantizer(nirs_token)
 		quan_features = torch.cat([quan_eeg, quan_nirs], dim=0) # [2 * B, E]
-		quan_fusion, fusion_quan_loss = self.fusion_quantizer(quan_features)
+		quan_fusion, fusion_quan_loss, fusion_code_use = self.fusion_quantizer(quan_features)
 		quan_eeg, quan_nirs = quan_fusion[:batch_size, :], quan_fusion[batch_size:, :]
 		outputs = self.classifier(eeg_token, nirs_token, quan_eeg, quan_nirs)
 
@@ -294,4 +297,5 @@ class EFBook(nn.Module):
 		return {
 			'outputs': outputs,
 			'quan_loss': quan_loss,
+			'code_use': (eeg_code_use + nirs_code_use + fusion_code_use) / 3,
 		}

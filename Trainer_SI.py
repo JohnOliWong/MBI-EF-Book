@@ -146,11 +146,11 @@ class Trainer:
 # the correlation between Q, K, V and embedding size
 config = {
 	'depth': 4,
-	'query_size': 64,
-	'key_size': 64,
-	'value_size': 64,
-	'emb_size': 64,
-	'dict_len': 64,
+	'query_size': 128,
+	'key_size': 128,
+	'value_size': 128,
+	'emb_size': 128,
+	'dict_len': 2048,
 	'decay': 0.99,
 	'num_heads': 4,
 	'expansion': 2,

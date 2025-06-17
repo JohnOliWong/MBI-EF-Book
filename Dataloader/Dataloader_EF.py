@@ -1,9 +1,10 @@
 import os
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 import pandas as pd
 import pickle
+from Data_Aug import data_augmentation
 
 
 class MultimodalDataset(Dataset):
@@ -192,8 +193,10 @@ def read_ef_pkl_si(subject, data_root):
 		with open(file_path, 'rb') as f:
 			data = pickle.load(f)
 		if i == subject:
-			testing_set['eeg'] = data['eeg'].unsqueeze(1)
-			testing_set['nirs'] = data['nirs'].unsqueeze(1)
+			testing_set['eeg'] = data_augmentation(data['eeg'])
+			testing_set['eeg'] = testing_set['eeg'].unsqueeze(1)
+			testing_set['nirs'] = data_augmentation(data['nirs'])
+			testing_set['nirs'] = testing_set['nirs'].unsqueeze(1)
 			testing_set['labels'] = data['labels']
 		else:
 			training_eeg.append(data['eeg'])
@@ -202,9 +205,11 @@ def read_ef_pkl_si(subject, data_root):
 	
 	training_set['eeg'] = torch.stack(training_eeg, dim=0)
 	training_set['eeg'] = training_set['eeg'].reshape(-1, training_set['eeg'].shape[2], training_set['eeg'].shape[3])
+	training_set['eeg'] = data_augmentation(training_set['eeg'])
 	training_set['eeg'] = training_set['eeg'].unsqueeze(1)
 	training_set['nirs'] = torch.stack(training_nirs, dim=0)
 	training_set['nirs'] = training_set['nirs'].reshape(-1, training_set['nirs'].shape[2], training_set['nirs'].shape[3])
+	training_set['nirs'] = data_augmentation(training_set['nirs'])
 	training_set['nirs'] = training_set['nirs'].unsqueeze(1)
 	training_set['labels'] = torch.stack(training_labels, dim=0)
 	training_set['labels'] = training_set['labels'].reshape(-1)

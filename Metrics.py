@@ -9,6 +9,7 @@ def log_metrics(subject, log_mode, acc_list, precision_list, recall_list, f1_lis
 		mean_recall, std_recall = np.mean(recall_list[-50:]), np.std(recall_list[-50:])
 		mean_f1, std_f1 = np.mean(f1_list[-50:]), np.std(f1_list[-50:])
 		mean_kappa = np.mean(kappa_list[-50:])
+		# mean_usage = np.mean(usage_list[-50:])
 
 		mean_acc, std_acc = mean_acc * 100, std_acc * 100
 		mean_precision, std_precision = mean_precision * 100, std_precision * 100
@@ -23,6 +24,7 @@ def log_metrics(subject, log_mode, acc_list, precision_list, recall_list, f1_lis
 				log_file.write(f'Recall: {mean_recall:.2f} ± {std_recall:.2f}\n')
 				log_file.write(f'F1: {mean_f1:.2f} ± {std_f1:2f}\n')
 				log_file.write(f'Kappa: {mean_kappa:.2f}\n')
+				# log_file.write(f'Codeword Usage: {mean_usage:.2f}\n')
 				log_file.write('\n')
 
 		if log_mode in [1, 2]:

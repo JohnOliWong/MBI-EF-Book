@@ -274,8 +274,8 @@ def read_wg_data_cross(eeg_root,nirs_root, baseline, random_seed):
 
     return eeg_train, nirs_train, labels_train, eeg_test, nirs_test, labels_test
 
-random_seed = int(time.time())
-eeg_root = f'D:/HIT/MBI/Dataset/EF-WG/Raw/'
-nirs_root = f'D:/HIT/MBI/Dataset/EF-WG/Raw/'
-eeg, nirs, labels = read_wg_data_single(1, eeg_root, nirs_root, baseline)
+# random_seed = int(time.time())
+# eeg_root = f'D:/HIT/MBI/Dataset/EF-WG/Raw/'
+# nirs_root = f'D:/HIT/MBI/Dataset/EF-WG/Raw/'
+# eeg, nirs, labels = read_wg_data_single(1, eeg_root, nirs_root, baseline)
 # eeg_train, nirs_train, labels_train, eeg_test, nirs_test, labels_test = read_wg_data_cross(eeg_root, nirs_root, baseline, random_seed)

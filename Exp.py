@@ -1,10 +1,23 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import pickle
 
 device = ('cuda' if torch.cuda.is_available() else 'cpu')
 print(torch.cuda.is_available())
 print(device)
+
+wg_root = '../../Dataset/EF-WG/WG/'
+subject = 1
+data_root = wg_root + str(subject) + '.pkl'
+with open(data_root, 'rb') as f:
+	data = pickle.load(f)
+
+eeg = data['eeg'] # [60, 30, 2000]
+nirs = data['nirs'] # [60, 72, 100]
+labels = data['labels']
+
+print(eeg.shape, nirs.shape, labels.shape)
 
 dict_len = 512
 emb_size = 64

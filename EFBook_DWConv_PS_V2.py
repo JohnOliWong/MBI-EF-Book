@@ -241,13 +241,17 @@ class EFBook(nn.Module):
 	x' = decoder(quan_T, quan_B)
 	'''
 	def __init__(self, depth, query_size, key_size, value_size, dict_len, emb_size, decay, num_heads, expansion, conv_dropout,
-				 self_dropout, cross_dropout, cls_dropout, num_classes, device):
+				 self_dropout, cross_dropout, cls_dropout, num_classes, mode, device):
 		super().__init__()
 
 		self.num_DHRConv = 4
 		self.num_DWConv = 8
-		self.eeg_conv = fNIRSNet(num_classes, DHRConv_width=4000, DWConv_height=30, num_DHRConv=self.num_DHRConv, num_DWConv=self.num_DWConv)
-		self.nirs_conv = fNIRSNet(num_classes, DHRConv_width=200, DWConv_height=72, num_DHRConv=self.num_DHRConv, num_DWConv=self.num_DWConv)
+		if mode == 0 or mode == 1:
+			self.eeg_conv = fNIRSNet(num_classes, DHRConv_width=4000, DWConv_height=30, num_DHRConv=self.num_DHRConv, num_DWConv=self.num_DWConv)
+			self.nirs_conv = fNIRSNet(num_classes, DHRConv_width=200, DWConv_height=72, num_DHRConv=self.num_DHRConv, num_DWConv=self.num_DWConv)
+		elif mode == 2:
+			self.eeg_conv = fNIRSNet(num_classes, DHRConv_width=2000, DWConv_height=30, num_DHRConv=self.num_DHRConv, num_DWConv=self.num_DWConv)
+			self.nirs_conv = fNIRSNet(num_classes, DHRConv_width=100, DWConv_height=72, num_DHRConv=self.num_DHRConv, num_DWConv=self.num_DWConv)
 		self.interpolation = torch.nn.Linear(self.num_DWConv, emb_size)
 
 		self.pooling = Pooling()

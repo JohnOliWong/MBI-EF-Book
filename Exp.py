@@ -3,6 +3,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pickle
 
+from datetime import date, timedelta
+
+date1 = date(2022, 3, 18)
+days = 179
+date2 = date1 + timedelta(days=days)
+print(date2)
+
 device = ('cuda' if torch.cuda.is_available() else 'cpu')
 print(torch.cuda.is_available())
 print(device)

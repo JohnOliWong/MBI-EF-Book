@@ -7,8 +7,44 @@ from einops import rearrange
 import random
 
 
+class EEGEncoder(nn.Module):
+	def __init__(self, emb_size, in_channels=30):
+		super(EEGEncoder, self).__init__()
+
+		self.block1 = nn.Sequential(
+			nn.Conv1d(in_channels, 16, kernel_size=64, stride=8, padding=28),
+			nn.BatchNorm1d(16),
+			nn.ReLU(),
+			nn.Dropout(0.3),
+
+			nn.Conv1d(16, 32, kernel_size=16, groups=16, padding='same'),
+			nn.Conv1d(32, 32, kernel_size=1),
+			nn.BatchNorm1d(32),
+			nn.ReLU(),
+			nn.AvgPool1d(kernel_size=4)
+		)
+
+		self.block2 = nn.Sequential(
+			nn.Conv1d(32, 32, kernel_size=3, dilation=4, padding='same'),
+			nn.BatchNorm1d(32),
+			nn.ReLU(),
+			nn.AvgPool1d(kernel_size=5),
+		)
+
+		self.block3 = nn.Sequential(
+			nn.Conv1d(32, emb_size, kernel_size=25),
+			nn.Flatten(),
+		)
+
+	def forward(self, x):
+		x = self.block1(x)
+		x = self.block2(x)
+		x = self.block3(x)
+		return x
+
+
 # Depthwise Separable Convolution
-class DSConv(torch.nn.Module):
+class DSConv(nn.Module):
 	def __init__(self, in_channels, out_channels, kernel_size):
 		super(DSConv, self).__init__()
 		self.depth_conv = torch.nn.Conv2d(in_channels, in_channels, kernel_size=kernel_size, stride=1, padding=0, groups=in_channels)
@@ -20,9 +56,9 @@ class DSConv(torch.nn.Module):
 		return x
 
 
-class fNIRSNet(torch.nn.Module):
+class NIRSEncoder(nn.Module):
 	def __init__(self, num_class, DHRConv_width, DWConv_height, num_DHRConv=4, num_DWConv=8):
-		super(fNIRSNet, self).__init__()
+		super(NIRSEncoder, self).__init__()
 		# Temporal Convolution
 		self.conv1 = torch.nn.Conv2d(in_channels=1, out_channels=num_DHRConv, kernel_size=(1, DHRConv_width), stride=1, padding=0)
 		self.bn1 = torch.nn.BatchNorm2d(num_DHRConv)
@@ -86,12 +122,39 @@ class ConditionalFusion(nn.Module):
 		return h
 
 
-class TemporalAlign(nn.Module):
-	def __init__(self):
+class EGTA(nn.Module):
+	def __init__(self, emb_size, num_heads=4, drop_out=0.3):
 		super().__init__()
 
+		self.emb_size = emb_size
+		self.query = nn.Parameter(torch.randn(1, emb_size))
+		self.key_proj = nn.Linear(emb_size, emb_size)
+		self.value_proj = nn.Linear(emb_size, emb_size)
+
+		self.attn = nn.MultiheadAttention(
+			embed_dim=emb_size,
+			num_heads=num_heads,
+			batch_first=True,
+		)
+
 	def forward(self, x, y):
-		return x
+		batch_size = x.shape[0]
+		query = self.query.unsqueeze(1).expand(batch_size, -1, -1)
+		key1 = self.key_proj(x).unsqueeze(1)
+		value1 = self.value_proj(x).unsqueeze(1)
+		key2 = self.key_proj(y).unsqueeze(1)
+		value2 = self.value_proj(y).unsqueeze(1)
+
+		key = torch.cat([key1, key2], dim=1) # [16, 2, 128]
+		value = torch.cat([value1, value2], dim=1) # [16, 2, 128]
+
+		attn_output, _ = self.attn( # [16, 1, 128]
+			query=query,
+			key=key,
+			value=value,
+		)
+
+		return attn_output.squeeze(1)
 
 
 class Quantization(nn.Module):
@@ -244,15 +307,18 @@ class EFBook(nn.Module):
 		self.num_DHRConv = 4
 		self.num_DWConv = 8
 		if mode == 0 or mode == 1:
-			self.eeg_conv = fNIRSNet(num_classes, DHRConv_width=4000, DWConv_height=30, num_DHRConv=self.num_DHRConv, num_DWConv=self.num_DWConv)
-			self.nirs_conv = fNIRSNet(num_classes, DHRConv_width=200, DWConv_height=72, num_DHRConv=self.num_DHRConv, num_DWConv=self.num_DWConv)
+			# self.eeg_conv = EEGEncoder(emb_size)
+			self.eeg_conv = NIRSEncoder(num_classes, DHRConv_width=4000, DWConv_height=30, num_DHRConv=self.num_DHRConv, num_DWConv=self.num_DWConv)
+			self.nirs_conv = NIRSEncoder(num_classes, DHRConv_width=200, DWConv_height=72, num_DHRConv=self.num_DHRConv, num_DWConv=self.num_DWConv)
 		elif mode == 2:
-			self.eeg_conv = fNIRSNet(num_classes, DHRConv_width=2000, DWConv_height=30, num_DHRConv=self.num_DHRConv, num_DWConv=self.num_DWConv)
-			self.nirs_conv = fNIRSNet(num_classes, DHRConv_width=100, DWConv_height=72, num_DHRConv=self.num_DHRConv, num_DWConv=self.num_DWConv)
+			# self.eeg_conv = EEGEncoder(emb_size)
+			self.eeg_conv = NIRSEncoder(num_classes, DHRConv_width=2000, DWConv_height=30, num_DHRConv=self.num_DHRConv, num_DWConv=self.num_DWConv)
+			self.nirs_conv = NIRSEncoder(num_classes, DHRConv_width=100, DWConv_height=72, num_DHRConv=self.num_DHRConv, num_DWConv=self.num_DWConv)
 		self.interpolation = torch.nn.Linear(self.num_DWConv, emb_size)
 
 		self.pooling = Pooling()
 		self.emb_size = emb_size
+		self.egta = EGTA(emb_size)
 		self.eeg_quantizer = Quantization(dict_len, self.emb_size)
 		self.nirs_quantizer = Quantization(dict_len, self.emb_size)
 		self.fusion_quantizer = Quantization(dict_len, self.emb_size)
@@ -261,7 +327,7 @@ class EFBook(nn.Module):
 
 	def forward(self, eeg, nirs):
 		# encoder
-		eeg_token = self.eeg_conv(eeg) # [16, 8, 1, 1] = [B, num_DWConv, 1, 1]
+		eeg_token = self.eeg_conv(eeg) # [16, 8, 1, 1] = [B, num_DWConv, 1, 1] or [16, 128]
 		nirs_token = self.nirs_conv(nirs) # [16, 8, 1, 1]
 
 		# if the output token shape is [16, 2, 1, 1], check that if the full-connection layer has been annoted correctly
@@ -273,13 +339,17 @@ class EFBook(nn.Module):
 		batch_size = eeg_token.shape[0]
 		quan_eeg, eeg_quan_loss = self.eeg_quantizer(eeg_token)
 		quan_nirs, nirs_quan_loss = self.nirs_quantizer(nirs_token)
-		quan_features = torch.cat([quan_eeg, quan_nirs], dim=0) # [2 * B, E]
-		quan_fusion, fusion_quan_loss = self.fusion_quantizer(quan_features)
-		quan_eeg, quan_nirs = quan_fusion[:batch_size, :], quan_fusion[batch_size:, :]
-		outputs = self.classifier(eeg_token, nirs_token, quan_eeg, quan_nirs)
 
-		lw_1, lw_2, lw_3 = 1.0, 1.0, 1.0
-		quan_loss = lw_1 * eeg_quan_loss + lw_2 * nirs_quan_loss + lw_3 * fusion_quan_loss
+		# quan_features = torch.cat([quan_eeg, quan_nirs], dim=0) # [2 * B, E]
+
+		attn_nirs = self.egta(quan_eeg, quan_nirs)
+		fusion_features = torch.cat([quan_eeg, attn_nirs], dim=0)
+		quan_fusion, fusion_quan_loss = self.fusion_quantizer(fusion_features)
+		quan_fusion_eeg, quan_fusion_nirs = quan_fusion[:batch_size, :], quan_fusion[batch_size:, :]
+		quan_eeg = quan_eeg + quan_fusion_eeg
+		quan_nirs = quan_nirs + quan_fusion_nirs
+		outputs = self.classifier(eeg_token, nirs_token, quan_eeg, quan_nirs)
+		quan_loss = eeg_quan_loss + nirs_quan_loss + 0.5 * fusion_quan_loss
 
 		return {
 			'outputs': outputs,

@@ -1,13 +1,12 @@
-from EFBook_DWConv_PS_WG import EFBook as ef
-from Metrics import log_metrics as metrics
+from EFBook_DWConv_PS_V4 import EFBook as ef
+from Metrics import metrics
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from sklearn.metrics import precision_score, recall_score, f1_score, cohen_kappa_score
-import pandas as pd
 import os
+import shutil
 import pickle
 
 torch.manual_seed(42)
@@ -33,6 +32,7 @@ class Trainer:
 			config['cross_dropout'],
 			config['cls_dropout'],
 			config['num_classes'],
+			config['mode'],
 			self.device,
 		).to(self.device).to(torch.float64)
 
@@ -42,12 +42,34 @@ class Trainer:
 
 		os.makedirs('Results', exist_ok=True)
 	
-	def z_score(self, signal, eps=1e-6):
-		mean = signal.mean(dim=(0,2), keepdim=True)
-		std = signal.std(dim=(0,2), keepdim=True)
-		std = torch.max(std, torch.tensor(eps, device=signal.device))
-		signal = (signal - mean) / std
-		return signal	
+	def z_score_mm(self, train_dataset, test_dataset, eps=1e-6):
+		train_eeg = torch.stack([train_dataset[i][0] for i in range(len(train_dataset))])
+		train_eeg_mean = train_eeg.mean(dim=(0,2), keepdim=True)
+		train_eeg_std = train_eeg.std(dim=(0,2),keepdim=True)
+		train_eeg = (train_eeg - train_eeg_mean) / (train_eeg_std + eps)
+
+		# print(train_eeg_std.mean().item())
+		# print(train_eeg_std.std().item())
+
+		train_nirs = torch.stack([train_dataset[i][1] for i in range(len(train_dataset))])
+		train_nirs_mean = train_nirs.mean(dim=(0,2), keepdim=True)
+		train_nirs_std = train_nirs.std(dim=(0,2),keepdim=True)
+		train_nirs = (train_nirs - train_nirs_mean) / (train_nirs_std + eps)
+
+		# print(train_nirs_std.mean().item())
+		# print(train_nirs_std.std().item())
+
+		train_labels = torch.stack([train_dataset[i][2] for i in range(len(train_dataset))])
+		train_dataset = torch.utils.data.TensorDataset(train_eeg, train_nirs, train_labels)
+
+		eval_eeg = torch.stack([test_dataset[i][0] for i in range(len(test_dataset))])
+		eval_eeg = (eval_eeg - train_eeg_mean) / (train_eeg_std + eps)
+		eval_nirs = torch.stack([test_dataset[i][1] for i in range(len(test_dataset))])
+		eval_nirs = (eval_nirs - train_nirs_mean) / (train_nirs_std + eps)
+		eval_labels = torch.stack([test_dataset[i][2] for i in range(len(test_dataset))])
+		test_dataset = torch.utils.data.TensorDataset(eval_eeg, eval_nirs, eval_labels)
+
+		return train_dataset, test_dataset
 	
 	def train_epoch(self, epoch, train_loader):
 		epoch += 1
@@ -112,7 +134,7 @@ class Trainer:
 		f1 = f1_score(all_labels, all_preds)
 		kappa = cohen_kappa_score(all_labels, all_preds)
 		
-		return loss, acc, precision, recall, f1, kappa	
+		return loss, acc, precision, recall, f1, kappa
 
 	def train_subject(self, subject, mode):
 		if mode == 0:
@@ -127,16 +149,13 @@ class Trainer:
 		eeg = data['eeg']
 		nirs = data['nirs']
 		labels = data['labels']
-
-		eeg = torch.tensor(eeg, dtype=torch.float64)
-		nirs = torch.tensor(nirs, dtype=torch.float64)
-		labels = torch.tensor(labels)
-
-		eeg = self.z_score(eeg)
-		nirs = self.z_score(nirs)
 		
-		eeg = eeg.unsqueeze(1)
-		nirs = nirs.unsqueeze(1)
+		if mode == 0 or mode == 1:
+			eeg = eeg.unsqueeze(1)
+			nirs = nirs.unsqueeze(1)
+		elif mode == 2:
+			eeg = torch.tensor(eeg, dtype=torch.float64)
+			nirs = torch.tensor(nirs, dtype=torch.float64)
 		eeg, nirs, labels = eeg.to(self.device), nirs.to(self.device), labels.to(self.device)
 		
 		train_size = int(config['ratio'] * len(eeg)) # training/testing ratio
@@ -144,6 +163,8 @@ class Trainer:
 		
 		dataset = torch.utils.data.TensorDataset(eeg, nirs, labels)
 		train_dataset, eval_dataset = torch.utils.data.random_split(dataset, [train_size, eval_size])
+		if config['z_score']:
+			train_dataset, eval_dataset = self.z_score_mm(train_dataset, eval_dataset)
 		train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.config['batch_size'], shuffle=True)
 		eval_loader = torch.utils.data.DataLoader(eval_dataset, batch_size=self.config['batch_size'], shuffle=False)
 		
@@ -174,7 +195,7 @@ config = {
 	'key_size': 128,
 	'value_size': 128,
 	'emb_size': 128,
-	'dict_len': 128,
+	'dict_len': 64,
 	'decay': 0.99,
 	'num_heads': 4,
 	'expansion': 2,
@@ -183,12 +204,14 @@ config = {
 	'cross_dropout': 0.3,
 	'cls_dropout': 0.5,
 	'num_classes': 2,
-	'batch_size': 32,
+	'batch_size': 16,
 	'num_epochs': 200,
 	'learning_rate': 1e-3,
 	'ratio': 0.6,
-	'log_name': 74,
+	'mode': 0,
+	'log_name': '805',
 	'log_mode': 1,
+	'z_score': True,
 	'quan_lambda': 0.1,
 	'mi_root': '../../Dataset/EF-MI-MA/EF-PKL-MI/',
 	'ma_root': '../../Dataset/EF-MI-MA/EF-PKL-MA/',
@@ -196,8 +219,21 @@ config = {
 }
 
 # Initialize and run trainer
-trainer = Trainer(config)
-for subject in range(29):
-	subject += 1
-	print(f"\n=== Subject {subject} ===")
-	results = trainer.train_subject(subject, mode=2) # 0 = MI, 1 = MA, 2 = WG
+current_dir = os.getcwd()
+results_dir = os.path.join(current_dir, 'Results', config['log_name'])
+file_name = 'SD.ipynb'
+
+source_dir = os.path.join(current_dir, file_name)
+destination_dir = results_dir
+
+for run in range(1):
+	trainer = Trainer(config)
+	mode = config['mode']
+	num_subject = (29 if mode == 0 or mode == 1 else 26) # MI = 0, MA = 1, WG = 2
+	for subject in range(num_subject):
+		subject += 1
+		print(f"\n=== Subject {subject} ===")
+		results = trainer.train_subject(subject, mode)
+
+os.makedirs(destination_dir, exist_ok=True)
+shutil.copy2(source_dir, destination_dir)

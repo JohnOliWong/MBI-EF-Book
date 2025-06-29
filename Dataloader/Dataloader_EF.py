@@ -121,6 +121,15 @@ def read_ef_excel_sd(subject, mode):
 	labels = torch.tensor(labels, dtype=torch.long)
 	print(f'{subject}', 'EEG', eeg.shape, 'fNIRS', nirs.shape, 'Labels', labels.shape)
 
+	data = {
+		'eeg': eeg,
+		'nirs': nirs,
+		'labels': labels,
+	}
+	file_path = str(subject) + '.pkl'
+	with open(file_path, 'wb') as f:
+		pickle.dump(data, f)
+
 	return eeg, nirs, labels
 
 def read_ef_excel_si(subject, mode):

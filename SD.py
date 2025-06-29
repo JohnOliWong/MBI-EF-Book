@@ -1,4 +1,4 @@
-from EFBook_DWConv_PS_V4 import EFBook as ef
+from EFBook_DWSConv_PS import EFBook as ef
 from Metrics import metrics
 
 import torch

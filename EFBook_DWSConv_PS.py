@@ -7,42 +7,6 @@ from einops import rearrange
 import random
 
 
-class EEGEncoder(nn.Module):
-	def __init__(self, emb_size, in_channels=30):
-		super(EEGEncoder, self).__init__()
-
-		self.block1 = nn.Sequential(
-			nn.Conv1d(in_channels, 16, kernel_size=64, stride=8, padding=28),
-			nn.BatchNorm1d(16),
-			nn.ReLU(),
-			nn.Dropout(0.3),
-
-			nn.Conv1d(16, 32, kernel_size=16, groups=16, padding='same'),
-			nn.Conv1d(32, 32, kernel_size=1),
-			nn.BatchNorm1d(32),
-			nn.ReLU(),
-			nn.AvgPool1d(kernel_size=4)
-		)
-
-		self.block2 = nn.Sequential(
-			nn.Conv1d(32, 32, kernel_size=3, dilation=4, padding='same'),
-			nn.BatchNorm1d(32),
-			nn.ReLU(),
-			nn.AvgPool1d(kernel_size=5),
-		)
-
-		self.block3 = nn.Sequential(
-			nn.Conv1d(32, emb_size, kernel_size=25),
-			nn.Flatten(),
-		)
-
-	def forward(self, x):
-		x = self.block1(x)
-		x = self.block2(x)
-		x = self.block3(x)
-		return x
-
-
 # Depthwise Separable Convolution
 class DSConv(nn.Module):
 	def __init__(self, in_channels, out_channels, kernel_size):
@@ -56,110 +20,55 @@ class DSConv(nn.Module):
 		return x
 
 
-class NIRSEncoder(nn.Module):
-	def __init__(self, num_class, DHRConv_width, DWConv_height, num_DHRConv=4, num_DWConv=8):
-		super(NIRSEncoder, self).__init__()
+class Encoder(nn.Module):
+	def __init__(self, num_class, emb_size, T_Width, S_Height, num_TConv=4, num_SConv=8):
+		super(Encoder, self).__init__()
 		# Temporal Convolution
-		self.conv1 = torch.nn.Conv2d(in_channels=1, out_channels=num_DHRConv, kernel_size=(1, DHRConv_width), stride=1, padding=0)
-		self.bn1 = torch.nn.BatchNorm2d(num_DHRConv)
+		self.conv1 = torch.nn.Conv2d(in_channels=1, out_channels=num_TConv, kernel_size=(1, T_Width), stride=1, padding=0)
+		self.bn1 = torch.nn.BatchNorm2d(num_TConv)
 
 		# Spatial Convolution
-		self.conv2 = DSConv(in_channels=num_DHRConv, out_channels=num_DWConv, kernel_size=(DWConv_height, 1))
-		self.bn2 = torch.nn.BatchNorm2d(num_DWConv)
+		self.conv2 = DSConv(in_channels=num_TConv, out_channels=num_SConv, kernel_size=(S_Height, 1))
+		self.bn2 = torch.nn.BatchNorm2d(num_SConv)
 
-		self.fc = torch.nn.Linear(num_DWConv, num_class)
+		self.fc = torch.nn.Linear(num_SConv, num_class)
 		self.act = torch.nn.Sigmoid()
+		self.interpolation = torch.nn.Linear(num_SConv, emb_size)
 
 	def forward(self, x):
 		x = self.act(self.bn1(self.conv1(x)))
 		x = self.act(self.bn2(self.conv2(x)))
+		x = x.squeeze()
+		x = self.interpolation(x)
 		return x
 
 
-class Pooling(nn.Module):
-	def __init__(self):
-		super().__init__()
-
-	def forward(self, x, factor):
-		x = x.float()
-		device = x.device
-		bottom_dim = x.shape[1]
-		top_dim = bottom_dim // factor
-		pool = nn.AvgPool1d(kernel_size=factor, stride=factor).to(device)
-		projection = nn.Sequential(
-			nn.Linear(bottom_dim, top_dim),
-			nn.ReLU()
-		).to(device)
-
-		x = projection(x)
-		x = x.double()
-		return x
-
-
-class ConditionalFusion(nn.Module):
-	def __init__(self):
-		super().__init__()
-
-	def forward(self, e, x):
-		x = x.float()
-		e = e.float()
-		device = x.device
-		top_dim = e.shape[1]
-		bottom_dim = x.shape[1]
-		projection = nn.Sequential(
-			nn.Linear(top_dim, bottom_dim),
-			nn.ReLU(),
-		).to(device)
-		attention = nn.MultiheadAttention(embed_dim=bottom_dim, num_heads=bottom_dim).to(device)
-
-		e = projection(e)
-		h, _ = attention(
-			query=e,
-			key=x,
-			value=x
-		)
-		h = h.double()
-		return h
-
-
-class EGTA(nn.Module):
+class EGA(nn.Module):
 	def __init__(self, emb_size, num_heads=4, drop_out=0.3):
 		super().__init__()
-
-		self.emb_size = emb_size
-		self.query = nn.Parameter(torch.randn(1, emb_size))
-		self.key_proj = nn.Linear(emb_size, emb_size)
-		self.value_proj = nn.Linear(emb_size, emb_size)
 
 		self.attn = nn.MultiheadAttention(
 			embed_dim=emb_size,
 			num_heads=num_heads,
+			dropout=drop_out,
 			batch_first=True,
 		)
 
 	def forward(self, x, y):
-		batch_size = x.shape[0]
-		query = self.query.unsqueeze(1).expand(batch_size, -1, -1)
-		key1 = self.key_proj(x).unsqueeze(1)
-		value1 = self.value_proj(x).unsqueeze(1)
-		key2 = self.key_proj(y).unsqueeze(1)
-		value2 = self.value_proj(y).unsqueeze(1)
-
-		key = torch.cat([key1, key2], dim=1) # [16, 2, 128]
-		value = torch.cat([value1, value2], dim=1) # [16, 2, 128]
-
-		attn_output, _ = self.attn( # [16, 1, 128]
-			query=query,
-			key=key,
-			value=value,
+		# x is the dominant modality, e.g. EEG
+		attn_output, _ = self.attn(
+			query=x,
+			key=y,
+			value=y,
 		)
 
-		return attn_output.squeeze(1)
+		return attn_output
 
 
 class Quantization(nn.Module):
 	'''
-	args:
+	Args:
+
 	cont_features: input continuous concatenated EEG-fNIRS features [B, T, E]
 	quan_features: quantized vectors [B, T, E]
 	codebook: a dictionary of prototype vectors [D, E]
@@ -206,7 +115,7 @@ class Quantization(nn.Module):
 			counts = one_hot.sum(dim=[0])  # [D]
 			matched = (counts > 0)
 			
-			if matched.any(): # .any() returns bool variables
+			if matched.any():
 				# summation of fine-grained representations matched to the corresponding codeword
 				sum_features = torch.einsum('nc,nd->dc', features, one_hot) # [D, E]
 				self.N[matched] = self.decay * self.N[matched] + (1-self.decay) * counts[matched]
@@ -263,7 +172,7 @@ class AttentionFusion(nn.Module):
 
 
 class Classifier(nn.Module):
-	def __init__(self, emb_size=128, num_classes=2):
+	def __init__(self, emb_size, num_class):
 		super().__init__()
 		
 		self.weight_eeg = AttentionFusion(emb_size)
@@ -274,8 +183,8 @@ class Classifier(nn.Module):
 		self.projector = nn.Sequential(
 			nn.Linear(emb_size, emb_size // 2),
 			nn.ReLU(),
-			nn.Linear(emb_size // 2, num_classes),
-			nn.ReLU()
+			nn.Linear(emb_size // 2, num_class),
+			nn.ReLU(),
 		)
 	
 	def forward(self, eeg_token, nirs_token, quan_eeg, quan_nirs):
@@ -293,57 +202,36 @@ class Classifier(nn.Module):
 
 
 class EFBook(nn.Module):
-	'''
-	feature_T = encoder_T(x)
-	quan_T = codebook_T(feature_T)
-	feature_B = encoder_B(x, quan_T)
-	quan_B  =codebook_B(feature_B)
-	x' = decoder(quan_T, quan_B)
-	'''
-	def __init__(self, depth, query_size, key_size, value_size, dict_len, emb_size, decay, num_heads, expansion, conv_dropout,
-				 self_dropout, cross_dropout, cls_dropout, num_classes, mode, device):
+	def __init__(self, dict_len, emb_size, num_class, mode):
 		super().__init__()
 
-		self.num_DHRConv = 4
-		self.num_DWConv = 8
-		if mode == 0 or mode == 1:
-			# self.eeg_conv = EEGEncoder(emb_size)
-			self.eeg_conv = NIRSEncoder(num_classes, DHRConv_width=4000, DWConv_height=30, num_DHRConv=self.num_DHRConv, num_DWConv=self.num_DWConv)
-			self.nirs_conv = NIRSEncoder(num_classes, DHRConv_width=200, DWConv_height=72, num_DHRConv=self.num_DHRConv, num_DWConv=self.num_DWConv)
-		elif mode == 2:
-			# self.eeg_conv = EEGEncoder(emb_size)
-			self.eeg_conv = NIRSEncoder(num_classes, DHRConv_width=2000, DWConv_height=30, num_DHRConv=self.num_DHRConv, num_DWConv=self.num_DWConv)
-			self.nirs_conv = NIRSEncoder(num_classes, DHRConv_width=100, DWConv_height=72, num_DHRConv=self.num_DHRConv, num_DWConv=self.num_DWConv)
-		self.interpolation = torch.nn.Linear(self.num_DWConv, emb_size)
-
-		self.pooling = Pooling()
 		self.emb_size = emb_size
-		self.egta = EGTA(emb_size)
+		self.num_TConv = 4
+		self.num_SConv = 8
+		if mode == 0 or mode == 1:
+			self.eeg_conv = Encoder(num_class, emb_size, T_Width=4000, S_Height=30, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
+			self.nirs_conv = Encoder(num_class, emb_size, T_Width=200, S_Height=72, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
+		elif mode == 2:
+			self.eeg_conv = Encoder(num_class, emb_size, T_Width=2000, S_Height=30, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
+			self.nirs_conv = Encoder(num_class, emb_size, T_Width=100, S_Height=72, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
+
+		self.ega = EGA(emb_size)
 		self.eeg_quantizer = Quantization(dict_len, self.emb_size)
 		self.nirs_quantizer = Quantization(dict_len, self.emb_size)
 		self.fusion_quantizer = Quantization(dict_len, self.emb_size)
-		self.fusion = ConditionalFusion()
-		self.classifier = Classifier(emb_size, num_classes)
+		self.classifier = Classifier(emb_size, num_class)
 
 	def forward(self, eeg, nirs):
-		# encoder
-		eeg_token = self.eeg_conv(eeg) # [16, 8, 1, 1] = [B, num_DWConv, 1, 1] or [16, 128]
-		nirs_token = self.nirs_conv(nirs) # [16, 8, 1, 1]
-
-		# if the output token shape is [16, 2, 1, 1], check that if the full-connection layer has been annoted correctly
-		eeg_token = eeg_token.squeeze()
-		eeg_token = self.interpolation(eeg_token)
-		nirs_token = nirs_token.squeeze()
-		nirs_token = self.interpolation(nirs_token) # [B, E]
+		eeg_token = self.eeg_conv(eeg) # [16, 128] = [B, E]
+		nirs_token = self.nirs_conv(nirs)
 
 		batch_size = eeg_token.shape[0]
 		quan_eeg, eeg_quan_loss = self.eeg_quantizer(eeg_token)
 		quan_nirs, nirs_quan_loss = self.nirs_quantizer(nirs_token)
 
-		# quan_features = torch.cat([quan_eeg, quan_nirs], dim=0) # [2 * B, E]
+		aligned_quan_nirs = self.ega(quan_eeg, quan_nirs)
+		fusion_features = torch.cat([quan_eeg, aligned_quan_nirs], dim=0)
 
-		attn_nirs = self.egta(quan_eeg, quan_nirs)
-		fusion_features = torch.cat([quan_eeg, attn_nirs], dim=0)
 		quan_fusion, fusion_quan_loss = self.fusion_quantizer(fusion_features)
 		quan_fusion_eeg, quan_fusion_nirs = quan_fusion[:batch_size, :], quan_fusion[batch_size:, :]
 		quan_eeg = quan_eeg + quan_fusion_eeg

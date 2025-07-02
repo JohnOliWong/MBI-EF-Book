@@ -76,12 +76,14 @@ class Quantization(nn.Module):
 	m: summation of continuous features matched to the current codeword [D, E]
 	status: reflect if a codeword is active or not [D,]
 	'''
-	def __init__(self, dict_len, emb_size, decay=0.99, ot_weight=1.0):
+	def __init__(self, dict_len, emb_size, decay=0.99, quan_weight=1.0, ot_weight=1.0, threshold=40):
 		super().__init__()
 		self.dict_len = dict_len
 		self.emb_size = emb_size
 		self.decay = decay
+		self.quan_weight = quan_weight
 		self.ot_weight = ot_weight
+		self.threshold = threshold
 
 		# initiate subject-specific, modality-invariant codebook
 		self.codebook = nn.Parameter(torch.randn(dict_len, emb_size))
@@ -92,27 +94,27 @@ class Quantization(nn.Module):
 	def forward(self, cont_features):
 		# compute L2-distance between each feature-codeword pair
 		distances = torch.cdist(cont_features, self.codebook)
-		quan_idx = torch.argmin(distances, dim=-1)  # [2 * B]
-		quan_token = self.codebook.data[quan_idx]  # [2 * B, E]
+		quan_idx = torch.argmin(distances, dim=-1) # [2 * B]
+		quan_token = self.codebook.data[quan_idx] # [2 * B, E]
 		quan_token = cont_features + (quan_token - cont_features).detach()
 		
 		# codebook variables are only updated during training
 		if self.training:
 			self.codebook_update(cont_features, quan_idx)
 
-		# difference between continuous and discrete features
-		quan_loss = F.mse_loss(quan_token.detach(), cont_features)
-		# difference between quantized EEG and fNIRS features
+		vq_loss = F.mse_loss(cont_features.detach(), quan_token)
+		commit_loss = F.mse_loss(cont_features, quan_token.detach())
+		quan_loss = vq_loss + commit_loss
 		ot_loss = self.ot_loss(cont_features, quan_idx)
-		codebook_loss = quan_loss + ot_loss
+		codebook_loss = self.quan_weight * quan_loss + self.ot_weight * ot_loss
 		return quan_token, codebook_loss
 	
 	def codebook_update(self, features, indices):
 		with torch.no_grad():
 			features = features.float()
 			# converts discrete codeword indices to sparse matrix
-			one_hot = F.one_hot(indices, num_classes=len(self.codebook)).float()  # [2 * B, D]
-			counts = one_hot.sum(dim=[0])  # [D]
+			one_hot = F.one_hot(indices, num_classes=len(self.codebook)).float() # [2 * B, D]
+			counts = one_hot.sum(dim=[0]) # [D]
 			matched = (counts > 0)
 			
 			if matched.any():
@@ -125,11 +127,11 @@ class Quantization(nn.Module):
 			
 			inactive = ~matched
 			self.status[inactive] += 1
-			if (self.status >= 100).any():
+			if (self.status >= self.threshold).any():
 				self.codeword_replace()
 
 	def codeword_replace(self):
-		inactive = (self.status >= 100)
+		inactive = (self.status >= self.threshold)
 		if inactive.any() and (self.N > 1).any():
 			active_idx = torch.where(self.N > 1)[0]
 			random_idx = random.choice(active_idx.cpu().numpy())
@@ -163,7 +165,7 @@ class AttentionFusion(nn.Module):
 		self.alpha = None
 
 	def forward(self, out):
-		o = torch.cat([i @ self.weight for i in out], dim=-1) # [16, 2] or [16]
+		o = torch.cat([i @ self.weight for i in out], dim=-1) # [16, 2] or [16,]
 		if o.dim() == 1:
 			o = o.unsqueeze(1)
 		self.alpha = self.softmax(o)

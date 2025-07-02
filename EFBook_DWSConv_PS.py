@@ -204,7 +204,7 @@ class Classifier(nn.Module):
 
 
 class EFBook(nn.Module):
-	def __init__(self, dict_len, emb_size, num_class, mode):
+	def __init__(self, dict_len, emb_size, num_class, threshold, mode):
 		super().__init__()
 
 		self.emb_size = emb_size
@@ -218,9 +218,9 @@ class EFBook(nn.Module):
 			self.nirs_conv = Encoder(num_class, emb_size, T_Width=100, S_Height=72, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
 
 		self.ega = EGA(emb_size)
-		self.eeg_quantizer = Quantization(dict_len, self.emb_size)
-		self.nirs_quantizer = Quantization(dict_len, self.emb_size)
-		self.fusion_quantizer = Quantization(dict_len, self.emb_size)
+		self.eeg_quantizer = Quantization(dict_len, self.emb_size, threshold=threshold)
+		self.nirs_quantizer = Quantization(dict_len, self.emb_size, threshold=threshold)
+		self.fusion_quantizer = Quantization(dict_len, self.emb_size, threshold=threshold)
 		self.classifier = Classifier(emb_size, num_class)
 
 	def forward(self, eeg, nirs):

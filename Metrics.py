@@ -3,13 +3,12 @@ from sklearn.metrics import precision_score, recall_score, f1_score, cohen_kappa
 import pandas as pd
 import os
 
-def metrics(subject, log_name, log_mode, acc_list, precision_list, recall_list, f1_list, kappa_list):
-		mean_acc, std_acc = np.mean(acc_list[-50:]), np.std(acc_list[-50:])
-		mean_precision, std_precision = np.mean(precision_list[-50:]), np.std(precision_list[-50:])
-		mean_recall, std_recall = np.mean(recall_list[-50:]), np.std(recall_list[-50:])
-		mean_f1, std_f1 = np.mean(f1_list[-50:]), np.std(f1_list[-50:])
-		mean_kappa = np.mean(kappa_list[-50:])
-		# mean_usage = np.mean(usage_list[-50:])
+def metrics(subject, log_name, log_mode, metric_epoches, acc_list, precision_list, recall_list, f1_list, kappa_list):
+		mean_acc, std_acc = np.mean(acc_list[-metric_epoches:]), np.std(acc_list[-metric_epoches:])
+		mean_precision, std_precision = np.mean(precision_list[-metric_epoches:]), np.std(precision_list[-metric_epoches:])
+		mean_recall, std_recall = np.mean(recall_list[-metric_epoches:]), np.std(recall_list[-metric_epoches:])
+		mean_f1, std_f1 = np.mean(f1_list[-metric_epoches:]), np.std(f1_list[-metric_epoches:])
+		mean_kappa = np.mean(kappa_list[-metric_epoches:])
 
 		mean_acc, std_acc = mean_acc * 100, std_acc * 100
 		mean_precision, std_precision = mean_precision * 100, std_precision * 100
@@ -26,7 +25,6 @@ def metrics(subject, log_name, log_mode, acc_list, precision_list, recall_list, 
 				log_file.write(f'Recall: {mean_recall:.2f} ± {std_recall:.2f}\n')
 				log_file.write(f'F1: {mean_f1:.2f} ± {std_f1:2f}\n')
 				log_file.write(f'Kappa: {mean_kappa:.2f}\n')
-				# log_file.write(f'Codeword Usage: {mean_usage:.2f}\n')
 				log_file.write('\n')
 
 		if log_mode in [1, 2]:

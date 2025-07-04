@@ -7,42 +7,6 @@ from einops import rearrange
 import random
 
 
-# Depthwise Separable Convolution
-class DSConv(nn.Module):
-	def __init__(self, in_channels, out_channels, kernel_size):
-		super(DSConv, self).__init__()
-		self.depth_conv = torch.nn.Conv2d(in_channels, in_channels, kernel_size=kernel_size, stride=1, padding=0, groups=in_channels)
-		self.point_conv = torch.nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, padding=0, groups=1)
-
-	def forward(self, input):
-		x = self.depth_conv(input)
-		x = self.point_conv(x)
-		return x
-
-
-class Encoder(nn.Module):
-	def __init__(self, num_class, emb_size, T_Width, S_Height, num_TConv=4, num_SConv=8):
-		super(Encoder, self).__init__()
-		# Temporal Convolution
-		self.conv1 = torch.nn.Conv2d(in_channels=1, out_channels=num_TConv, kernel_size=(1, T_Width), stride=1, padding=0)
-		self.bn1 = torch.nn.BatchNorm2d(num_TConv)
-
-		# Spatial Convolution
-		self.conv2 = DSConv(in_channels=num_TConv, out_channels=num_SConv, kernel_size=(S_Height, 1))
-		self.bn2 = torch.nn.BatchNorm2d(num_SConv)
-
-		self.fc = torch.nn.Linear(num_SConv, num_class)
-		self.act = torch.nn.Sigmoid()
-		self.interpolation = torch.nn.Linear(num_SConv, emb_size)
-
-	def forward(self, x):
-		x = self.act(self.bn1(self.conv1(x)))
-		x = self.act(self.bn2(self.conv2(x)))
-		x = x.squeeze()
-		x = self.interpolation(x)
-		return x
-
-
 class EGA(nn.Module):
 	def __init__(self, emb_size, num_heads=4, drop_out=0.3):
 		super().__init__()
@@ -218,8 +182,9 @@ class EFBook(nn.Module):
 			self.nirs_conv = Encoder(num_class, emb_size, T_Width=100, S_Height=72, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
 
 		self.ega = EGA(emb_size)
-		self.eeg_quantizer = Quantization(dict_len, self.emb_size, threshold=threshold)
-		self.nirs_quantizer = Quantization(dict_len, self.emb_size, threshold=threshold)
+		self.s_to_p = nn.Linear(emb_size, emb_size // 2)
+		self.eeg_quantizer = Quantization(dict_len, self.emb_size // 2, threshold=threshold)
+		self.nirs_quantizer = Quantization(dict_len, self.emb_size // 2, threshold=threshold)
 		self.fusion_quantizer = Quantization(dict_len, self.emb_size, threshold=threshold)
 		self.classifier = Classifier(emb_size, num_class)
 
@@ -228,11 +193,20 @@ class EFBook(nn.Module):
 		nirs_token = self.nirs_conv(nirs)
 
 		batch_size = eeg_token.shape[0]
-		quan_eeg, eeg_quan_loss = self.eeg_quantizer(eeg_token)
-		quan_nirs, nirs_quan_loss = self.nirs_quantizer(nirs_token)
+		eeg_private_token = self.s_to_p(eeg_token)  # [B, E/2]
+		nirs_private_token = self.s_to_p(nirs_token)
+		quan_eeg, eeg_quan_loss = self.eeg_quantizer(eeg_private_token)
+		quan_nirs, nirs_quan_loss = self.nirs_quantizer(nirs_private_token)
 
-		aligned_quan_nirs = self.ega(quan_eeg, quan_nirs)
-		fusion_features = torch.cat([quan_eeg, aligned_quan_nirs], dim=0)
+		disentangle_loss = 
+
+		# Plan I
+		# aligned_quan_nirs = self.ega(quan_eeg, quan_nirs)
+		# fusion_features = torch.cat([quan_eeg, aligned_quan_nirs], dim=0)
+
+		# Plan II
+		aligned_nirs = self.ega(eeg_token, nirs_token)
+		fusion_features = torch.cat([eeg_token, aligned_nirs], dim=0)
 
 		quan_fusion, fusion_quan_loss = self.fusion_quantizer(fusion_features)
 		quan_fusion_eeg, quan_fusion_nirs = quan_fusion[:batch_size, :], quan_fusion[batch_size:, :]

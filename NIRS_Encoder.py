@@ -139,15 +139,15 @@ class NIRS_Encoder(nn.Module):
         self.transformer_channel = Transformer(dim, depth, heads, dim_head, mlp_dim, dropout)
 
         self.pool = pool
-        self.to_latent = nn.Identity()
-        self.mlp_head = nn.Sequential(
+        self.projection = nn.Sequential(
             nn.LayerNorm(dim * 2),
-            nn.Linear(dim * 2, n_class))
-
+            nn.Linear(dim * 2, dim),
+            nn.LayerNorm(dim),
+        )
 
     def forward(self, img, mask=None):
-        x = self.to_patch_embedding(img)
-        x2 = self.to_channel_embedding(img.squeeze())
+        x = self.to_patch_embedding(img) # [16, 68, 128]
+        x2 = self.to_channel_embedding(img) # [16, 72, 128]
 
         b, n, _ = x.shape
         cls_tokens = repeat(self.cls_token_patch, '() n d -> b n d', b=b)
@@ -166,8 +166,7 @@ class NIRS_Encoder(nn.Module):
         x = x.mean(dim=1) if self.pool == 'mean' else x[:, 0]
         x2 = x2.mean(dim=1) if self.pool == 'mean' else x2[:, 0]
 
-        x = self.to_latent(x)
-        x2 = self.to_latent(x2)
-        x3 = torch.cat((x, x2), 1)
+        x3 = torch.cat([x, x2], dim=-1)
+        x3 = self.projection(x3)
 
-        return self.mlp_head(x3)
+        return x3

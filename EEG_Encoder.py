@@ -74,7 +74,7 @@ class TemporalConvLayer(nn.Module):
         super().__init__()
         self.eeg_temporal_projection = EEGTemporalConvLayer(emb_size, dropout)
 
-    def forward(self, eeg, nirs):
+    def forward(self, eeg):
         temporal_eeg_features = self.eeg_temporal_projection(eeg)
 
         return temporal_eeg_features
@@ -220,7 +220,7 @@ class Transformer(nn.Module):
 
     def forward(self, temporal_eeg):
         eeg_temporal_outputs = self.eeg_temporal_encoder(temporal_eeg)
-        return [eeg_temporal_outputs[:, 0]]
+        return eeg_temporal_outputs[:, 0]
 
     @property
     def get_eeg_attention_weights(self):

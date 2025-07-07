@@ -3,47 +3,80 @@ from sklearn.metrics import precision_score, recall_score, f1_score, cohen_kappa
 import pandas as pd
 import os
 
-def metrics(subject, log_name, log_mode, seed, metric_epoches, acc_list, precision_list, recall_list, f1_list, kappa_list):
-		mean_acc, std_acc = np.mean(acc_list[-metric_epoches:]), np.std(acc_list[-metric_epoches:])
-		mean_precision, std_precision = np.mean(precision_list[-metric_epoches:]), np.std(precision_list[-metric_epoches:])
-		mean_recall, std_recall = np.mean(recall_list[-metric_epoches:]), np.std(recall_list[-metric_epoches:])
-		mean_f1, std_f1 = np.mean(f1_list[-metric_epoches:]), np.std(f1_list[-metric_epoches:])
-		mean_kappa, std_kappa = np.mean(kappa_list[-metric_epoches:]), np.std(kappa_list[-metric_epoches:])
 
-		mean_acc, std_acc = mean_acc * 100, std_acc * 100
-		mean_precision, std_precision = mean_precision * 100, std_precision * 100
-		mean_recall, std_recall = mean_recall * 100, std_recall * 100
-		mean_f1, std_f1 = mean_f1 * 100, std_f1 * 100
-	
-		results_dir = 'Results/'
-		log_name = str(log_name)
-		if log_mode in [0, 2]:
-			log_path = results_dir + log_name + f'Subject_{subject}.txt'
-			with open(log_path, 'a') as log_file:
-				log_file.write(f'Seed: {seed}\n')
-				log_file.write(f'Accuracy: {mean_acc:.2f} ± {std_acc:.2f}\n')
-				log_file.write(f'Precision: {mean_precision:.2f} ± {std_precision:.2f}\n')
-				log_file.write(f'Recall: {mean_recall:.2f} ± {std_recall:.2f}\n')
-				log_file.write(f'F1: {mean_f1:.2f} ± {std_f1:2f}\n')
-				log_file.write(f'Kappa: {mean_kappa:.2f} ± {std_kappa:2f}\n')
-				log_file.write('\n')
-
-		if log_mode in [1, 2]:
-			log_root = results_dir + log_name
-			if not os.path.exists(log_root):
-				os.makedirs(log_root)
-			log_excel = log_root + f'/{log_name}.xlsx'
-			new_row = pd.DataFrame([[seed, mean_acc, std_acc, mean_precision, std_precision, mean_recall, std_recall, mean_f1, std_f1, mean_kappa, std_kappa]], 
-								columns=['Seed', 'Accuracy', 'Std_Accuracy', 'Precision', 'Std_Precision', 'Recall', 'Std_Recall', 'F1', 'Std_F1', 'Kappa', 'Std_Kappa'])
-			new_row = new_row.round(2)
-			if not os.path.exists(log_excel):
-				new_row.to_excel(log_excel, index=False, engine='openpyxl')
+def train_metrics(log_root, log_name, acc_list, precision_list, recall_list, f1_list, kappa_list):
+	if not os.path.exists(log_root):
+		os.makedirs(log_root)
+	log_excel = log_root + f'{log_name}.xlsx'
+	acc_list = [acc * 100 for acc in acc_list]
+	precision_list = [precision * 100 for precision in precision_list]
+	recall_list = [recall * 100 for recall in recall_list]
+	f1_list = [f1 * 100 for f1 in f1_list]
+	data = {
+		'Accuracy': acc_list,
+		'Precision': precision_list,
+		'Recall': recall_list,
+		'F1': f1_list,
+		'Kappa': kappa_list
+	}
+	new_row = pd.DataFrame(data).round(2)
+	if not os.path.exists(log_excel):
+		new_row.to_excel(log_excel, index=False, engine='openpyxl')
+	else:
+		with pd.ExcelWriter(log_excel, mode='a', engine='openpyxl', if_sheet_exists='overlay') as writer:
+			if 'Sheet1' in writer.sheets:
+				startrow = writer.sheets['Sheet1'].max_row
 			else:
-				with pd.ExcelWriter(log_excel, mode='a', engine='openpyxl', if_sheet_exists='overlay') as writer:
-					if 'Sheet1' in writer.sheets:
-						startrow = writer.sheets['Sheet1'].max_row
-					else:
-						startrow = 0
-					new_row.to_excel(writer, index=False, header=False, startrow=startrow)
+				startrow = 0
+			new_row.to_excel(writer, index=False, header=False, startrow=startrow)
+	
+	print('Logging Completed')
 
-		print(f'Subject:{subject} Accuracy: {mean_acc:.2f} ± {std_acc:.2f}\n')
+def eval_metrics(log_root, acc_list, precision_list, recall_list, f1_list, kappa_list):
+	if not os.path.exists(log_root):
+		os.makedirs(log_root)
+	exp_name = log_root.split('/')[-2]
+	log_excel = log_root + f'{exp_name}.xlsx'
+	acc_list = [acc * 100 for acc in acc_list]
+	precision_list = [precision * 100 for precision in precision_list]
+	recall_list = [recall * 100 for recall in recall_list]
+	f1_list = [f1 * 100 for f1 in f1_list]
+	data = {
+		'Accuracy': acc_list,
+		'Precision': precision_list,
+		'Recall': recall_list,
+		'F1': f1_list,
+		'Kappa': kappa_list
+	}
+	new_row = pd.DataFrame(data).round(2)
+	if not os.path.exists(log_excel):
+		new_row.to_excel(log_excel, index=False, engine='openpyxl')
+	else:
+		with pd.ExcelWriter(log_excel, mode='a', engine='openpyxl', if_sheet_exists='overlay') as writer:
+			if 'Sheet1' in writer.sheets:
+				startrow = writer.sheets['Sheet1'].max_row
+			else:
+				startrow = 0
+			new_row.to_excel(writer, index=False, header=False, startrow=startrow)
+	
+	print('Logging Completed')
+
+def save_seed(exp_name, mode, seeds):
+	log_root = 'Results/' + 'Seed.txt'
+
+	with open(log_root, 'w') as f:
+		f.write(exp_name + '\n')
+		f.write(str(mode) + '\n')
+		for seed in seeds:
+			f.write(str(seed) + '\n')
+
+def load_seed():
+	log_root = 'Results/' + 'Seed.txt'
+
+	with open(log_root, 'r') as f:
+		lines = f.readlines()
+		exp_name = lines[0].strip()
+		mode = int(lines[1].strip())
+		seeds = [int(line.strip()) for line in lines[1:]]
+
+	return exp_name, mode, seeds

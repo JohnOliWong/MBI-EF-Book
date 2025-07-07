@@ -69,15 +69,65 @@ class EEGTemporalConvLayer(nn.Module):
         return eeg
 
 
+class NIRSTemporalConvLayer(nn.Module):
+    def __init__(self, emb_size, dropout, bias=False):
+        super().__init__()
+        
+        # emb_size = 64
+        # outputs_size = (64, 6)
+        pooling_kernel = [2, 1, 2]
+        self.dropout = dropout
+
+        # outputs_size = (72, 25 / 2)
+        self.nirs_block1 = nn.Sequential(
+            nn.Conv2d(in_channels=1, out_channels=emb_size // 1, kernel_size=(1, 3), padding=(0, 3 // 2), bias=bias),
+            nn.BatchNorm2d(emb_size // 1),
+            nn.ReLU(),
+            nn.Dropout(self.dropout),
+            nn.AvgPool2d((1, pooling_kernel[0])),
+        )
+
+        # outputs_size = (1, 12 / 1)
+        # kernel_size = (channel, 1)
+        self.nirs_block2 = nn.Sequential(
+            DWSConv(in_channels=emb_size // 1, out_channels=emb_size // 1, kernel_size=(72, 1), padding=(0, 0), bias=bias),
+            nn.BatchNorm2d(emb_size // 1),
+            nn.ReLU(),
+            nn.Dropout(self.dropout),
+            nn.AvgPool2d((1, pooling_kernel[1])),
+        )
+
+        # outputs_size = (1, 12 / 2)
+        self.nirs_block3 = nn.Sequential(
+            nn.Conv2d(in_channels=emb_size // 1, out_channels=emb_size, kernel_size=(1, 3), padding=(0, 3 // 2), bias=bias),
+            nn.BatchNorm2d(emb_size),
+            nn.ReLU(),
+            nn.Dropout(self.dropout),
+            nn.AvgPool2d((1, pooling_kernel[2])),
+        )
+
+    def forward(self, nirs):
+        nirs = nirs[:, :, :]
+        if nirs.ndim == 3:
+            nirs = nirs.unsqueeze(1)
+        nirs = self.nirs_block1(nirs)
+        nirs = self.nirs_block2(nirs)
+        nirs = self.nirs_block3(nirs)
+
+        return nirs
+
+
 class TemporalConvLayer(nn.Module):
     def __init__(self, emb_size, dropout):
         super().__init__()
         self.eeg_temporal_projection = EEGTemporalConvLayer(emb_size, dropout)
+        self.nirs_temporal_projection = NIRSTemporalConvLayer(emb_size, dropout)
 
-    def forward(self, eeg):
+    def forward(self, eeg, nirs):
         temporal_eeg_features = self.eeg_temporal_projection(eeg)
+        temporal_nirs_features = self.nirs_temporal_projection(nirs)
 
-        return temporal_eeg_features
+        return temporal_eeg_features, temporal_nirs_features
 
 
 class Positional_Embedding(nn.Module):
@@ -165,7 +215,7 @@ class Self_Encoder(nn.Module):
         self.norm2 = nn.LayerNorm(emb_size)
 
     def forward(self, x):
-        # x is dominant modality
+        # x is the dominant modality
         res = x
         x = self.norm1(x)
         y = self.attention(x, x, x)
@@ -214,38 +264,52 @@ class Transformer(nn.Module):
         self.eeg_temporal_spatial_attention_weights = None
         self.eeg_temporal_attention_weights = None
         self.eeg_spatial_attention_weights = None
+        self.nirs_spatial_attention_weights = None
+        self.mask = [channels[0] + 1, channels[1] + 1]
 
         self.eeg_temporal_encoder = Transformer_Encoder(depth, query_size, key_size, value_size, emb_size,
                                                            num_heads, channels[0], expansion, cross_dropout, device)
 
-    def forward(self, temporal_eeg):
+        self.nirs_temporal_encoder = Transformer_Encoder(depth, query_size, key_size, value_size, emb_size,
+                                                            num_heads, channels[1], expansion, cross_dropout, device)
+
+    def forward(self, temporal_eeg, temporal_nirs):
         eeg_temporal_outputs = self.eeg_temporal_encoder(temporal_eeg)
-        return eeg_temporal_outputs[:, 0]
+        nirs_temporal_outputs = self.nirs_temporal_encoder(temporal_nirs)
+        return eeg_temporal_outputs[:, 0], nirs_temporal_outputs[:, 0]
 
     @property
     def get_eeg_attention_weights(self):
         return [self.eeg_temporal_attention_weights, self.eeg_spatial_attention_weights]
 
+    @property
+    def get_nirs_spatial_attention_weights(self):
+        return [self.nirs_spatial_attention_weights, ]
+
+    @property
+    def get_cross_attention_weights(self):
+        return [self.eeg_nirs_temporal_spatial_attention_weights, self.eeg_temporal_spatial_attention_weights]
+
 
 # only temporal convolution is used in this script
-class EEG_Encoder(nn.Module):
+class EF_Encoder(nn.Module):
     def __init__(self, depth, query_size, key_size, value_size, emb_size, num_heads, expansion, conv_dropout,
                  self_dropout, cross_dropout, cls_dropout, num_classes, device):
         super().__init__()
         self.temporal_conv_layer = TemporalConvLayer(emb_size, conv_dropout)
  
         with torch.no_grad():
-            # eeg and nirs signals are randomly generated to obtain the channels
-            eeg = torch.randn(1, 30, 4000)
-            eeg_token = self.temporal_conv_layer(eeg)
-            channels = [eeg_token.shape[-1]]
+            eeg, nirs = torch.randn(1, 30, 4000), torch.randn(1, 72, 200)
+            eeg_token, nirs_token = self.temporal_conv_layer(eeg, nirs)
+            channels = [eeg_token.shape[-1], nirs_token.shape[-1]]
 
         self.transformer = Transformer(depth, query_size, key_size, value_size, emb_size, num_heads, channels,
                                        expansion, device, self_dropout, cross_dropout)
 
-    def forward(self, eeg):
-        temporal_eeg = self.temporal_conv_layer(eeg)
+    def forward(self, eeg, nirs):
+        temporal_eeg, temporal_nirs = self.temporal_conv_layer(eeg, nirs)
         temporal_eeg = temporal_eeg.squeeze(-2).permute(0, 2, 1)
-        eeg_token = self.transformer(temporal_eeg)
+        temporal_nirs = temporal_nirs.squeeze(-2).permute(0, 2, 1)
+        eeg_token, nirs_token = self.transformer(temporal_eeg, temporal_nirs)
 
-        return eeg_token
+        return eeg_token, nirs_token

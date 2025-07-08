@@ -188,7 +188,7 @@ class EFBook(nn.Module):
 		self.num_TConv = 4
 		self.num_SConv = 8
 		self.ef_conv = EF_Encoder(depth=4, query_size=emb_size, key_size=emb_size, value_size=emb_size, emb_size=emb_size, num_heads=4, expansion=2, conv_dropout=0.3,
-                 					self_dropout=0.3, cross_dropout=0.3, cls_dropout=0.5, num_classes=num_class, device=device)
+                 				  self_dropout=0.3, cross_dropout=0.3, cls_dropout=0.5, num_classes=num_class, device=device)
 		# self.nirs_conv = NIRS_Encoder(num_class, sampling_point=200, dim=emb_size, depth=6, heads=8, mlp_dim=emb_size, pool='cls', dim_head=emb_size, dropout=0., emb_dropout=0.)
 		self.eeg_common_conv = Common_Encoder(num_class, emb_size, T_Width=4000, S_Height=30, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
 		self.nirs_common_conv = Common_Encoder(num_class, emb_size, T_Width=200, S_Height=72, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
@@ -224,7 +224,7 @@ class EFBook(nn.Module):
 		quan_eeg = quan_eeg + quan_fusion_eeg
 		quan_nirs = quan_nirs + quan_fusion_nirs
 		outputs = self.classifier(eeg_p_token, nirs_p_token, quan_eeg, quan_nirs)
-		quan_loss = eeg_quan_loss + nirs_quan_loss + 0.5 * fusion_quan_loss
+		quan_loss = 0.5 * disentangle_loss + eeg_quan_loss + nirs_quan_loss + 0.5 * fusion_quan_loss
 
 		return {
 			'outputs': outputs,

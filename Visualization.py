@@ -67,7 +67,7 @@ class Visualization():
 		disp.plot(cmap=plt.cm.Blues)
 		plt.title(self.title)
 		cm_save_path = self.results_root + f'CM_Overall_{self.title}.png'
-		plt.savefig(self.cm_path, dpi=300, bbox_inches='tight')
+		plt.savefig(cm_save_path, dpi=300, bbox_inches='tight')
 		plt.close()
 		
 	def plot_all(self, train_loss, train_acc, eval_loss, eval_acc, all_labels, all_preds):

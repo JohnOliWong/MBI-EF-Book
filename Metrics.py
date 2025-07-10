@@ -17,7 +17,7 @@ def metrics(log_root, data):
 	
 	print('Logging Completed')
 
-def save_params(results_root, config, seeds):
+def save_param(results_root, config, seeds):
 	log_root = results_root + 'Params.pkl'
 
 	with open(log_root, 'wb') as f:
@@ -25,7 +25,7 @@ def save_params(results_root, config, seeds):
 		pickle.dump(config, f)
 		pickle.dump(seeds, f)
 
-def load_seed(results_root):
+def load_param(results_root):
 	log_root = results_root + 'Params.pkl'
 
 	with open(log_root, 'rb') as f:

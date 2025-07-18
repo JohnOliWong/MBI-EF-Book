@@ -4,6 +4,7 @@ import smtplib
 import ssl
 from email.mime.text import MIMEText
 from email.header import Header
+import os
 
 
 def send_yagmail(exp_name):
@@ -19,7 +20,8 @@ def send_yagmail(exp_name):
 	yagmail_server = yagmail.SMTP(user=sender, password=auth_code, host=smtp_server)
 	email_title = ["Training Completed"]
 	email_content = [f"The training process of experiment {exp_name} on the remote server is completed"]
-	yagmail_server.send(to=receiver, subject=email_title, contents=email_content)
+	file = ('nohup.out' if os.path.exists('nohup.out') else None)
+	yagmail_server.send(to=receiver, subject=email_title, contents=email_content, attachments=file)
 	yagmail_server.close()
 	logger.info("Email Sent!")
 

@@ -1,6 +1,6 @@
 import pandas as pd
 import os
-import pickle
+import json
 
 
 def metrics(log_root, data):
@@ -18,19 +18,21 @@ def metrics(log_root, data):
 	print('Logging Completed')
 
 def save_param(results_root, config, seeds):
-	log_root = results_root + 'Params.pkl'
-
-	with open(log_root, 'wb') as f:
-		pickle.dump(results_root, f)
-		pickle.dump(config, f)
-		pickle.dump(seeds, f)
+	log_root = results_root + 'Params.json'
+	if not os.path.exists(log_root):
+		os.makedirs(os.path.dirname(log_root), exist_ok=True)
+	data = {
+		'results_root': results_root,
+		'config': config,
+		'seeds': seeds,
+	}
+	with open(log_root, 'w', encoding='utf-8') as f:
+		json.dump(data, f, ensure_ascii=False, indent=2)
 
 def load_param(results_root):
-	log_root = results_root + 'Params.pkl'
-
-	with open(log_root, 'rb') as f:
-		results_root = pickle.load(f)
-		config = pickle.load(f)
-		seeds = pickle.load(f)
-	
+	log_root = results_root + 'Params.json'
+	with open(log_root, 'r', encoding='utf-8') as f:
+		data = json.load(f)
+	config = data['config']
+	seeds  =data['seeds']
 	return config, seeds

@@ -94,22 +94,7 @@ class Transformer(nn.Module):
         return x
 
 
-class NIRS_Encoder(nn.Module):
-    """
-    fNIRS-T model
-
-    Args:
-        n_class: number of classes.
-        sampling_point: sampling points of input fNIRS signals. Input shape is [B, 1, channel, time].
-        dim: last dimension of output tensor after linear transformation.
-        depth: number of Transformer blocks.
-        heads: number of the multi-head self-attention.
-        mlp_dim: dimension of the MLP layer.
-        pool: MLP layer classification mode, 'cls' is [CLS] token pooling, 'mean' is  average pooling, default='cls'.
-        dim_head: dimension of the multi-head self-attention, default=64.
-        dropout: dropout rate, default=0.
-        emb_dropout: dropout for patch embeddings, default=0.
-    """
+class Encoder_NIRS(nn.Module):
     def __init__(self, n_class, sampling_point, dim, depth, heads, mlp_dim, pool='cls', dim_head=64, dropout=0., emb_dropout=0.):
         super().__init__()
         num_patches = 100

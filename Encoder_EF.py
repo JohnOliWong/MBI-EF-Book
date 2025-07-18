@@ -292,7 +292,7 @@ class Transformer(nn.Module):
 
 
 # only temporal convolution is used in this script
-class EF_Encoder(nn.Module):
+class Encoder_EF(nn.Module):
     def __init__(self, depth, query_size, key_size, value_size, emb_size, num_heads, expansion, conv_dropout,
                  self_dropout, cross_dropout, cls_dropout, num_classes, device):
         super().__init__()

@@ -3,8 +3,7 @@ import torch.nn.functional as F
 from torch import nn
 import random
 
-from EF_Encoder import EF_Encoder
-from Common_Encoder import Common_Encoder
+from Encoder_Common import Encoder_Common
 
 
 class EGA(nn.Module):
@@ -180,18 +179,15 @@ class Cosine_Loss(nn.Module):
 		return torch.mean(constraint ** 2)
 
 
-class EFBook(nn.Module):
+class EF_Book(nn.Module):
 	def __init__(self, dict_len, emb_size, num_class, threshold, device):
 		super().__init__()
 
 		self.emb_size = emb_size
 		self.num_TConv = 4
 		self.num_SConv = 8
-		self.ef_conv = EF_Encoder(depth=4, query_size=emb_size, key_size=emb_size, value_size=emb_size, emb_size=emb_size, num_heads=4, expansion=2, conv_dropout=0.3,
-                 				  self_dropout=0.3, cross_dropout=0.3, cls_dropout=0.5, num_classes=num_class, device=device)
-		# self.nirs_conv = NIRS_Encoder(num_class, sampling_point=200, dim=emb_size, depth=6, heads=8, mlp_dim=emb_size, pool='cls', dim_head=emb_size, dropout=0., emb_dropout=0.)
-		self.eeg_common_conv = Common_Encoder(num_class, emb_size, T_Width=4000, S_Height=30, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
-		self.nirs_common_conv = Common_Encoder(num_class, emb_size, T_Width=200, S_Height=72, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
+		self.eeg_common_conv = Encoder_Common(num_class, emb_size, T_Width=4000, S_Height=30, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
+		self.nirs_common_conv = Encoder_Common(num_class, emb_size, T_Width=200, S_Height=72, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
 
 		self.eeg_quantizer = Quantization(dict_len, self.emb_size, threshold=threshold)
 		self.nirs_quantizer = Quantization(dict_len, self.emb_size, threshold=threshold)
@@ -201,30 +197,17 @@ class EFBook(nn.Module):
 		self.classifier = Classifier(emb_size, num_class)
 
 	def forward(self, eeg, nirs):
-		eeg_p_token, nirs_p_token = self.ef_conv(eeg, nirs) # [16, 128] = [B, E]
-
 		eeg_s_token = self.eeg_common_conv(eeg) # [16, 128] = [B, E]
 		nirs_s_token = self.nirs_common_conv(nirs)
-
-		batch_size = eeg_p_token.shape[0]
-		disentangle_loss = self.cosine_loss(eeg_s_token, eeg_p_token) + self.cosine_loss(nirs_s_token, nirs_p_token)
-		quan_eeg, eeg_quan_loss = self.eeg_quantizer(eeg_p_token)
-		quan_nirs, nirs_quan_loss = self.nirs_quantizer(nirs_p_token)
-
-		# Plan I
-		# aligned_quan_nirs = self.ega(quan_eeg, quan_nirs)
-		# fusion_features = torch.cat([quan_eeg, aligned_quan_nirs], dim=0)
-
-		# Plan II
-		nirs_s_token = self.ega(eeg_s_token, nirs_s_token)
 		fusion_features = torch.cat([eeg_s_token, nirs_s_token], dim=0)
 
+		batch_size = eeg_s_token.shape[0]
 		quan_fusion, fusion_quan_loss = self.fusion_quantizer(fusion_features)
 		quan_fusion_eeg, quan_fusion_nirs = quan_fusion[:batch_size, :], quan_fusion[batch_size:, :]
-		quan_eeg = quan_eeg + quan_fusion_eeg
-		quan_nirs = quan_nirs + quan_fusion_nirs
-		outputs = self.classifier(eeg_p_token, nirs_p_token, quan_eeg, quan_nirs)
-		quan_loss = 0.5 * disentangle_loss + eeg_quan_loss + nirs_quan_loss + 0.5 * fusion_quan_loss
+		quan_eeg = quan_fusion_eeg
+		quan_nirs = quan_fusion_nirs
+		outputs = self.classifier(eeg_s_token, nirs_s_token, quan_eeg, quan_nirs)
+		quan_loss = fusion_quan_loss
 
 		return {
 			'outputs': outputs,

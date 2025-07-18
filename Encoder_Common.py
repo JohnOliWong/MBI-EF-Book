@@ -14,9 +14,9 @@ class DWSConv(nn.Module):
 		x = self.point_conv(x)
 		return x
 
-class Common_Encoder(nn.Module):
+class Encoder_Common(nn.Module):
 	def __init__(self, num_class, emb_size, T_Width, S_Height, num_TConv=4, num_SConv=8):
-		super(Common_Encoder, self).__init__()
+		super(Encoder_Common, self).__init__()
 		# Temporal Convolution
 		self.conv1 = torch.nn.Conv2d(in_channels=1, out_channels=num_TConv, kernel_size=(1, T_Width), stride=1, padding=0)
 		self.bn1 = torch.nn.BatchNorm2d(num_TConv)

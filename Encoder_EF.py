@@ -177,8 +177,6 @@ class Attention(nn.Module):
         if mask is not None:
             fill_value = torch.finfo(torch.float32).min
             energy.mask_fill(~mask, fill_value)
-
-
         self.attention_weights = F.softmax(energy / self.scaling, dim=-1)
         att = self.att_drop(self.attention_weights)
         out = torch.einsum('bhal, bhlv -> bhav ', att, values)
@@ -250,23 +248,12 @@ class Transformer_Encoder(nn.Module):
             self.attention_weights[i] = blk.attention.attention_weights
         return x
 
-    @property
-    def self_attention_weights(self):
-        return self.attention_weights
-
 
 class Transformer(nn.Module):
     # calling various transformer functions
     def __init__(self, depth, query_size, key_size, value_size, emb_size, num_heads, channels, expansion, device,
                  self_dropout, cross_dropout):
         super().__init__()
-        self.eeg_nirs_temporal_spatial_attention_weights = None
-        self.eeg_temporal_spatial_attention_weights = None
-        self.eeg_temporal_attention_weights = None
-        self.eeg_spatial_attention_weights = None
-        self.nirs_spatial_attention_weights = None
-        self.mask = [channels[0] + 1, channels[1] + 1]
-
         self.eeg_temporal_encoder = Transformer_Encoder(depth, query_size, key_size, value_size, emb_size,
                                                            num_heads, channels[0], expansion, cross_dropout, device)
 
@@ -277,18 +264,6 @@ class Transformer(nn.Module):
         eeg_temporal_outputs = self.eeg_temporal_encoder(temporal_eeg)
         nirs_temporal_outputs = self.nirs_temporal_encoder(temporal_nirs)
         return eeg_temporal_outputs[:, 0], nirs_temporal_outputs[:, 0]
-
-    @property
-    def get_eeg_attention_weights(self):
-        return [self.eeg_temporal_attention_weights, self.eeg_spatial_attention_weights]
-
-    @property
-    def get_nirs_spatial_attention_weights(self):
-        return [self.nirs_spatial_attention_weights, ]
-
-    @property
-    def get_cross_attention_weights(self):
-        return [self.eeg_nirs_temporal_spatial_attention_weights, self.eeg_temporal_spatial_attention_weights]
 
 
 # only temporal convolution is used in this script

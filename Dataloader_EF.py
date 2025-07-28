@@ -112,3 +112,51 @@ def read_ef_eval_si(subject, mode):
 	testing_set = MultimodalDataset(testing_set)
 
 	return testing_set
+
+def read_wg_pkl_si(subject, mode):
+	'''
+	Training Set:
+	eeg [1500, 30, 2000]
+	nirs.shape = [1500, 72, 100]
+	labels [1500,]
+
+	Testing Set:
+	eeg [60, 30, 2000]
+	nirs.shape = [60, 72, 100]
+	labels [60,]
+	'''
+	num_sub = 26
+	training_set = {}
+	testing_set = {}
+	training_eeg = []
+	training_nirs = []
+	training_labels = []
+
+	for i in range(1, num_sub+1):
+		data_root = '../../Dataset/EF-WG/WG/' + str(i) + '.pkl'
+		with open(data_root, 'rb') as f:
+			data = pickle.load(f)
+		eeg = data['eeg']
+		nirs = data['nirs']
+		labels = data['labels']
+		if i == subject:
+			eeg = eeg.unsqueeze(1)
+			nirs = nirs.unsqueeze(1)
+			testing_set = {
+				'eeg': eeg,
+				'nirs': nirs,
+				'labels': labels
+			}
+		else:
+			training_eeg.append(data['eeg'])
+			training_nirs.append(data['nirs'])
+			training_labels.append(data['labels'])
+	
+	training_set['eeg'] = torch.stack(training_eeg, dim=0)
+	training_set['eeg'] = training_set['eeg'].reshape(-1, training_set['eeg'].shape[2], training_set['eeg'].shape[3])
+	training_set['eeg'] = training_set['eeg'].unsqueeze(1)
+	training_set['nirs'] = torch.stack(training_nirs, dim=0)
+	training_set['nirs'] = training_set['nirs'].reshape(-1, training_set['nirs'].shape[2], training_set['nirs'].shape[3])
+	training_set['nirs'] = training_set['nirs'].unsqueeze(1)
+	training_set['labels'] = torch.stack(training_labels, dim=0)
+	training_set['labels'] = training_set['labels'].reshape(-1)

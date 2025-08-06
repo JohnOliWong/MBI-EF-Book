@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 
-# Depthwise Separable Convolution
+# Separable Spatial Convolution
 class DWSConv(nn.Module):
 	def __init__(self, in_channels, out_channels, kernel_size):
 		super(DWSConv, self).__init__()
@@ -21,17 +21,17 @@ class Encoder_Common(nn.Module):
 		self.conv1 = torch.nn.Conv2d(in_channels=1, out_channels=num_TConv, kernel_size=(1, T_Width), stride=1, padding=0)
 		self.bn1 = torch.nn.BatchNorm2d(num_TConv)
 
-		# Spatial Convolution
+		# Separable Spatial Convolution
 		self.conv2 = DWSConv(in_channels=num_TConv, out_channels=num_SConv, kernel_size=(S_Height, 1))
 		self.bn2 = torch.nn.BatchNorm2d(num_SConv)
 
 		self.fc = torch.nn.Linear(num_SConv, num_class)
 		self.act = torch.nn.Sigmoid()
-		self.interpolation = torch.nn.Linear(num_SConv, emb_size)
+		self.project = torch.nn.Linear(num_SConv, emb_size)
 
 	def forward(self, x):
 		x = self.act(self.bn1(self.conv1(x)))
 		x = self.act(self.bn2(self.conv2(x)))
 		x = x.squeeze()
-		x = self.interpolation(x)
+		x = self.project(x)
 		return x

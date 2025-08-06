@@ -1,3 +1,7 @@
+'''
+We removed the optimal transport loss L_{OT}
+'''
+
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -74,9 +78,9 @@ class Quantization(nn.Module):
 		codebook_loss = self.quan_weight * quan_loss + self.ot_weight * ot_loss
 
 		if usage is not None:
-			return {'usage': usage, 'quan_token': quan_token, 'codebook_loss': codebook_loss}
+			return {'usage': usage, 'quan_token': quan_token, 'quan_loss': quan_loss, 'ot_loss': ot_loss}
 		else:
-			return {'quan_token': quan_token, 'codebook_loss': codebook_loss}
+			return {'quan_token': quan_token, 'quan_loss': quan_loss, 'ot_loss': ot_loss}
 	
 	def codebook_update(self, features, indices):
 		with torch.no_grad():
@@ -216,14 +220,21 @@ class EF_Book(nn.Module):
 		eeg_p_token, nirs_p_token = self.ef_conv(eeg, nirs) # [16, 128] = [B, E]
 		eeg_s_token = self.eeg_common_conv(eeg) # [16, 128] = [B, E]
 		nirs_s_token = self.nirs_common_conv(nirs)
-		disentangle_loss = self.cosine_loss(eeg_s_token, eeg_p_token)
+		disentangling_loss = self.cosine_loss(eeg_s_token, eeg_p_token) + self.cosine_loss(nirs_s_token, nirs_p_token)
 		
 		# EEG private codebook
 		eeg_quan_outputs = self.eeg_quantizer(eeg_p_token)
 		eeg_quan_usage = None
-		if len(eeg_quan_outputs) == 3:
+		if len(eeg_quan_outputs) == 4:
 			eeg_quan_usage = eeg_quan_outputs['usage']
-		quan_eeg, eeg_quan_loss = eeg_quan_outputs['quan_token'], eeg_quan_outputs['codebook_loss']
+		quan_eeg, eeg_quan_loss = eeg_quan_outputs['quan_token'], eeg_quan_outputs['quan_loss'] + eeg_quan_outputs['ot_loss']
+
+		# fNIRS private codebook
+		nirs_quan_outputs = self.nirs_quantizer(nirs_p_token)
+		nirs_quan_usage = None
+		if len(nirs_quan_outputs) == 4:
+			nirs_quan_usage = nirs_quan_outputs['usage']
+		quan_nirs, nirs_quan_loss = nirs_quan_outputs['quan_token'], nirs_quan_outputs['quan_loss'] + nirs_quan_outputs['ot_loss']
 		
 		# EEG-fNIRS shared codebook
 		batch_size = eeg_p_token.shape[0]
@@ -231,20 +242,22 @@ class EF_Book(nn.Module):
 		fusion_features = torch.cat([eeg_s_token, nirs_s_token], dim=0)
 		fusion_quan_outputs = self.fusion_quantizer(fusion_features)
 		fusion_quan_usage = None
-		if len(fusion_quan_outputs) == 3:
+		if len(fusion_quan_outputs) == 4:
 			fusion_quan_usage = fusion_quan_outputs['usage']
-		quan_fusion, fusion_quan_loss = fusion_quan_outputs['quan_token'], fusion_quan_outputs['codebook_loss']
+		quan_fusion, fusion_quan_loss = fusion_quan_outputs['quan_token'], fusion_quan_outputs['quan_loss'] + fusion_quan_outputs['ot_loss']
 		quan_fusion_eeg, quan_fusion_nirs = quan_fusion[:batch_size, :], quan_fusion[batch_size:, :]
 		if last_batch and eeg_quan_usage is not None:
-			print(f'Codebook Usage: EEG {eeg_quan_usage} Shared {fusion_quan_usage}')
+			print(f'Codebook Usage: EEG {eeg_quan_usage} fNIRS {nirs_quan_usage} Shared {fusion_quan_usage}')
 		
 		# classification
 		eeg_token = eeg_p_token
+		nirs_token = nirs_p_token
 		quan_eeg = quan_eeg + quan_fusion_eeg
-		outputs = self.classifier(eeg_token, eeg_token, quan_eeg, quan_eeg)
-		quan_loss = 0.5 * disentangle_loss + eeg_quan_loss + 0.5 * fusion_quan_loss
+		quan_nirs = quan_nirs + quan_fusion_nirs
+		outputs = self.classifier(eeg_token, nirs_token, quan_eeg, quan_nirs)
+		codebook_loss = eeg_quan_loss + nirs_quan_loss + 0.5 * fusion_quan_loss
 
 		return {
 			'outputs': outputs,
-			'quan_loss': quan_loss,
+			'loss': 0.15 * codebook_loss,
 		}

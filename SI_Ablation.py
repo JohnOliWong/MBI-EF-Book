@@ -1,10 +1,11 @@
-from EF_Book_VQ import EF_Book as ef
-from EF_Book_SharedVQ import EF_Book as ef_sharedvq
-from EF_Book_PrivateVQ import EF_Book as ef_privatevq
-from EF_Book_NoVQ import EF_Book as ef_novq
+from EF_Book_NoAttention import EF_Book as ef_noattn
+from EF_Book_NoShared import EF_Book as ef_noshared
+from EF_Book_NoOT import EF_Book as ef_noot
 from EF_Book_EEG import EF_Book as ef_eeg
 from EF_Book_NIRS import EF_Book as ef_nirs
+from EF_Book_NoLD import EF_Book as ef_nold
 from Dataloader_EF import read_ef_train_si as si_data
+from Dataloader_EF import read_wg_pkl_si as wg_data
 from Metrics import metrics, save_param
 from Visualization import Visualization as vis
 from Notification import send_yagmail
@@ -21,20 +22,22 @@ class Trainer:
 	def __init__(self, config):
 		self.config = config
 		self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+		self.mode = config['mode']
 
 		if config['model_id'] == 1:
-			self.model = ef_sharedvq(config['dict_len'], config['emb_size'], config['num_class'], config['threshold'], self.device).to(self.device).to(torch.float64)
+			self.model = ef_noattn(config['dict_len'], config['emb_size'], config['num_class'], self.mode, config['threshold'], self.device).to(self.device).to(torch.float64)
 		elif config['model_id'] == 2:
-			self.model = ef_privatevq(config['dict_len'], config['emb_size'], config['num_class'], config['threshold'], self.device).to(self.device).to(torch.float64)
+			self.model = ef_noshared(config['dict_len'], config['emb_size'], config['num_class'], self.mode, config['threshold'], self.device).to(self.device).to(torch.float64)
 		elif config['model_id'] == 3:
-			self.model = ef_novq(config['dict_len'], config['emb_size'], config['num_class'], config['threshold'], self.device).to(self.device).to(torch.float64)
+			self.model = ef_noot(config['dict_len'], config['emb_size'], config['num_class'], self.mode, config['threshold'], self.device).to(self.device).to(torch.float64)
 		elif config['model_id'] == 4:
-			self.model = ef_eeg(config['dict_len'], config['emb_size'], config['num_class'], config['threshold'], self.device).to(self.device).to(torch.float64)
+			self.model = ef_eeg(config['dict_len'], config['emb_size'], config['num_class'], self.mode, config['threshold'], self.device).to(self.device).to(torch.float64)
 		elif config['model_id'] == 5:
-			self.model = ef_nirs(config['dict_len'], config['emb_size'], config['num_class'], config['threshold'], self.device).to(self.device).to(torch.float64)
-		
+			self.model = ef_nirs(config['dict_len'], config['emb_size'], config['num_class'], self.mode, config['threshold'], self.device).to(self.device).to(torch.float64)
+		elif config['model_id'] == 6:
+			self.model = ef_nold(config['dict_len'], config['emb_size'], config['num_class'], self.mode, config['threshold'], self.device).to(self.device).to(torch.float64)
 		self.criterion = nn.CrossEntropyLoss()
-		self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config['learning_rate'], weight_decay=config['learning_rate'])
+		self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config['learning_rate'], weight_decay=0.2 * config['learning_rate'])
 		self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
 			self.optimizer,
 			mode='min',
@@ -70,7 +73,10 @@ class Trainer:
 		return train_dataset, test_dataset
 	
 	def train_subject(self, subject, mode):
-		train_dataset, eval_dataset = si_data(subject, mode)
+		if mode == 0 or mode == 1:
+			train_dataset, eval_dataset = si_data(subject, mode)
+		elif mode == 2:
+			train_dataset, eval_dataset = wg_data(subject, mode)
 		if self.config['z_score']:
 			train_dataset, eval_dataset = self.z_score_mm(train_dataset, eval_dataset)
 		train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.config['batch_size'], shuffle=True)
@@ -79,10 +85,19 @@ class Trainer:
 		best_acc = 0
 		train_loss_list, train_acc_list = [], []
 		loss_list, acc_list, precision_list, recall_list, f1_list, kappa_list = [], [], [], [], [], []
+		wu_lr = self.config['learning_rate'] / 10
+		base_lr = self.config['learning_rate']
+		current_lr, warm_up = base_lr, self.config['warm_up']
 		for epoch in range(self.config['num_epochs']):
 			#----------Training----------
 			self.model.train()
 			total_correct, total_loss = 0, 0
+
+			# warm-up epochs
+			current_lr = wu_lr if epoch < warm_up else base_lr
+			for param_group in self.optimizer.param_groups:
+				if param_group['lr'] != current_lr:
+					param_group['lr'] = current_lr
 
 			num_batch = len(train_loader)
 			for i, (batch_eeg, batch_nirs, batch_labels) in enumerate(train_loader):
@@ -93,9 +108,9 @@ class Trainer:
 				
 				model_output = self.model(batch_eeg, batch_nirs, last_batch=last_batch)
 				outputs = model_output['outputs']
-				quan_loss = model_output['quan_loss']
+				quan_loss = model_output['loss']
 				cls_loss = self.criterion(outputs, batch_labels.long())
-				loss = cls_loss + self.config['quan_lambda'] * quan_loss
+				loss = cls_loss + quan_loss
 				self.optimizer.zero_grad()
 				loss.backward()
 				self.optimizer.step()
@@ -122,9 +137,9 @@ class Trainer:
 					
 					model_output = self.model(eval_eeg, eval_nirs, last_batch=False)
 					outputs = model_output['outputs']
-					quan_loss = model_output['quan_loss']
+					quan_loss = model_output['loss']
 					cls_loss = self.criterion(outputs, eval_labels.long())
-					loss = cls_loss + self.config['quan_lambda'] * quan_loss
+					loss = cls_loss + quan_loss
 					total_loss += loss.item()
 					
 					preds = torch.argmax(outputs, dim=1)
@@ -134,7 +149,7 @@ class Trainer:
 					all_labels.extend(eval_labels.cpu().numpy())
 			
 			eval_loss = total_loss / len(eval_loader)
-			self.scheduler.step(loss)
+			self.scheduler.step(eval_loss)
 			eval_acc = total_correct / len(eval_loader.dataset)
 			if eval_acc > best_acc:
 				best_acc = eval_acc
@@ -183,30 +198,35 @@ config = {
 	'mi_root': '../../Dataset/EF-MI-MA/MI/',
 	'ma_root': '../../Dataset/EF-MI-MA/MA/',
 	'wg_root' : '../../Dataset/EF-WG/WG/',
-	'dict_len': 2048,
+	'dict_len': 1800,
 	'emb_size': 64,
 	'threshold': 60,
 	'batch_size': 32,
-	'num_epochs': 100,
+	'warm_up': 10,
+	'num_epochs': 80,
 	'learning_rate': 1e-3,
-	'quan_lambda': 0.1,
-	'mode': 0,
-	'model_id': 0,
-	'exp_name': '8016/',
+	'mode': 2,
+	'model_id': 3,
+	'exp_name': '82301/',
 	'z_score': True,
 }
 
 # Instantiate trainer
 mode = config['mode']
-num_subject = 5
+# num_subject = 10
+num_subject = (29 if mode == 0 or mode == 1 else 26)
 results_root = 'Results/' + config['exp_name']
 seeds, total_labels, total_preds = [], [], []
 for subject in range(1, num_subject+1):
 	seed = 42
 	# seed = random.randint(1, 2025)
 	seeds.append(seed)
+	os.environ['PYTHONHASHSEED'] = str(object=seed)
+	np.random.seed(seed)
 	torch.manual_seed(seed)
 	torch.cuda.manual_seed_all(seed)
+	torch.backends.cudnn.deterministic = True
+	torch.backends.cudnn.benchmark = False
 	start_time = time.time()
 	start_time_string = time.strftime('%b %d %Y %H:%M:%S', time.localtime(start_time))
 	print(f"\n=== Subject {subject} ===")

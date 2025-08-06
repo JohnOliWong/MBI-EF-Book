@@ -3,7 +3,7 @@ import torch.nn.functional as F
 from torch import nn
 import random
 
-from Encoder_EF import Encoder_EF
+from Encoder_EF_NoAttention import Encoder_EF_NoAttention
 from Encoder_Common import Encoder_Common
 
 
@@ -200,7 +200,7 @@ class EF_Book(nn.Module):
 		self.num_TConv = 4
 		self.num_SConv = 8
 		
-		self.ef_conv = Encoder_EF(depth=4, query_size=emb_size, key_size=emb_size, value_size=emb_size, emb_size=emb_size, num_heads=4, expansion=2, conv_dropout=0.3,
+		self.ef_conv = Encoder_EF_NoAttention(depth=4, query_size=emb_size, key_size=emb_size, value_size=emb_size, emb_size=emb_size, num_heads=4, expansion=2, conv_dropout=0.3,
                  				  self_dropout=0.3, cross_dropout=0.3, cls_dropout=0.5, num_classes=num_class, mode=mode, device=device)
 		self.eeg_common_conv = Encoder_Common(num_class, emb_size, T_Width=self.EEG_Width, S_Height=30, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
 		self.nirs_common_conv = Encoder_Common(num_class, emb_size, T_Width=self.NIRS_Width, S_Height=72, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
@@ -216,7 +216,7 @@ class EF_Book(nn.Module):
 		eeg_p_token, nirs_p_token = self.ef_conv(eeg, nirs) # [16, 128] = [B, E]
 		eeg_s_token = self.eeg_common_conv(eeg) # [16, 128] = [B, E]
 		nirs_s_token = self.nirs_common_conv(nirs)
-		disentangle_loss = self.cosine_loss(eeg_s_token, eeg_p_token)
+		disentangle_loss = self.cosine_loss(eeg_s_token, eeg_p_token) + self.cosine_loss(nirs_s_token, nirs_p_token)
 		
 		# EEG private codebook
 		eeg_quan_outputs = self.eeg_quantizer(eeg_p_token)
@@ -224,6 +224,13 @@ class EF_Book(nn.Module):
 		if len(eeg_quan_outputs) == 3:
 			eeg_quan_usage = eeg_quan_outputs['usage']
 		quan_eeg, eeg_quan_loss = eeg_quan_outputs['quan_token'], eeg_quan_outputs['codebook_loss']
+
+		# fNIRS private codebook
+		nirs_quan_outputs = self.nirs_quantizer(nirs_p_token)
+		nirs_quan_usage = None
+		if len(nirs_quan_outputs) == 3:
+			nirs_quan_usage = nirs_quan_outputs['usage']
+		quan_nirs, nirs_quan_loss = nirs_quan_outputs['quan_token'], nirs_quan_outputs['codebook_loss']
 		
 		# EEG-fNIRS shared codebook
 		batch_size = eeg_p_token.shape[0]
@@ -236,13 +243,15 @@ class EF_Book(nn.Module):
 		quan_fusion, fusion_quan_loss = fusion_quan_outputs['quan_token'], fusion_quan_outputs['codebook_loss']
 		quan_fusion_eeg, quan_fusion_nirs = quan_fusion[:batch_size, :], quan_fusion[batch_size:, :]
 		if last_batch and eeg_quan_usage is not None:
-			print(f'Codebook Usage: EEG {eeg_quan_usage} Shared {fusion_quan_usage}')
+			print(f'Codebook Usage: EEG {eeg_quan_usage} fNIRS {nirs_quan_usage} Shared {fusion_quan_usage}')
 		
 		# classification
-		eeg_token = eeg_p_token
+		eeg_token = eeg_s_token
+		nirs_token = nirs_s_token
 		quan_eeg = quan_eeg + quan_fusion_eeg
-		outputs = self.classifier(eeg_token, eeg_token, quan_eeg, quan_eeg)
-		quan_loss = 0.5 * disentangle_loss + eeg_quan_loss + 0.5 * fusion_quan_loss
+		quan_nirs = quan_nirs + quan_fusion_nirs
+		outputs = self.classifier(eeg_token, nirs_token, quan_eeg, quan_nirs)
+		quan_loss = 0.5 * disentangle_loss + eeg_quan_loss + nirs_quan_loss + 0.5 * fusion_quan_loss
 
 		return {
 			'outputs': outputs,

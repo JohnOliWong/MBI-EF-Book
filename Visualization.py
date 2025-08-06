@@ -7,6 +7,7 @@ from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 class Visualization():
 	def __init__(self, subject, mode, results_root):
 		self.subject = str(subject)
+		self.mode = mode
 		self.title = ('MI' if mode == 0 else 'MA' if mode == 1 else 'WG')
 		self.results_root = results_root
 		self.curve_path = results_root + f'Curve_{self.subject}_{self.title}.png'
@@ -54,7 +55,14 @@ class Visualization():
 	def plot_cm(self, all_labels, all_preds):
 		cm = confusion_matrix(all_labels, all_preds)
 		cm = cm / cm.sum(axis=1, keepdims=True)
-		disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=['Left', 'Right'])
+		labels = ['Task 1', 'Task 2']
+		if self.mode == 0:
+			labels = ['Left', 'Right']
+		elif self.mode == 1:
+			labels = ['MA', 'BL']
+		elif self.mode == 2:
+			labels = ['WG', 'BL']
+		disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
 		disp.plot(cmap=plt.cm.Blues)
 		plt.title(self.title)
 		plt.savefig(self.cm_path, dpi=300, bbox_inches='tight')
@@ -63,7 +71,14 @@ class Visualization():
 	def plot_cm_all(self, all_labels, all_preds):
 		cm = confusion_matrix(all_labels, all_preds)
 		cm = cm / cm.sum(axis=1, keepdims=True)
-		disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=['Left', 'Right'])
+		labels = ['Task 1', 'Task 2']
+		if self.mode == 0:
+			labels = ['Left', 'Right']
+		elif self.mode == 1:
+			labels = ['MA', 'BL']
+		elif self.mode == 2:
+			labels = ['WG', 'BL']
+		disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=labels)
 		disp.plot(cmap=plt.cm.Blues)
 		plt.title(self.title)
 		cm_save_path = self.results_root + f'CM_Overall_{self.title}.png'

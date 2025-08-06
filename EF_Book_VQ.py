@@ -71,7 +71,8 @@ class Quantization(nn.Module):
 		commit_loss = F.mse_loss(cont_features, quan_token.detach())
 		quan_loss = vq_loss + commit_loss
 		ot_loss = self.ot_loss(cont_features, quan_idx)
-		codebook_loss = self.quan_weight * quan_loss + self.ot_weight * ot_loss
+		# print(f'Codebook Loss: {quan_loss}, OT Loss: {ot_loss}')
+		codebook_loss = self.quan_weight * quan_loss + 30 * ot_loss
 
 		if usage is not None:
 			return {'usage': usage, 'quan_token': quan_token, 'codebook_loss': codebook_loss}
@@ -188,16 +189,22 @@ class Cosine_Loss(nn.Module):
 
 
 class EF_Book(nn.Module):
-	def __init__(self, dict_len, emb_size, num_class, threshold, device):
+	def __init__(self, dict_len, emb_size, num_class, mode, threshold, device):
 		super().__init__()
-
 		self.emb_size = emb_size
+		if mode == 0 or mode == 1:
+			self.EEG_Width = 4000
+			self.NIRS_Width = 200
+		elif mode == 2:
+			self.EEG_Width = 2000
+			self.NIRS_Width = 100
 		self.num_TConv = 4
 		self.num_SConv = 8
+		
 		self.ef_conv = Encoder_EF(depth=4, query_size=emb_size, key_size=emb_size, value_size=emb_size, emb_size=emb_size, num_heads=4, expansion=2, conv_dropout=0.3,
-                 				  self_dropout=0.3, cross_dropout=0.3, cls_dropout=0.5, num_classes=num_class, device=device)
-		self.eeg_common_conv = Encoder_Common(num_class, emb_size, T_Width=4000, S_Height=30, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
-		self.nirs_common_conv = Encoder_Common(num_class, emb_size, T_Width=200, S_Height=72, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
+                 				  self_dropout=0.3, cross_dropout=0.3, cls_dropout=0.5, num_classes=num_class, mode=mode, device=device)
+		self.eeg_common_conv = Encoder_Common(num_class, emb_size, T_Width=self.EEG_Width, S_Height=30, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
+		self.nirs_common_conv = Encoder_Common(num_class, emb_size, T_Width=self.NIRS_Width, S_Height=72, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
 
 		self.eeg_quantizer = Quantization(dict_len, self.emb_size, threshold=threshold)
 		self.nirs_quantizer = Quantization(dict_len, self.emb_size, threshold=threshold)
@@ -210,7 +217,7 @@ class EF_Book(nn.Module):
 		eeg_p_token, nirs_p_token = self.ef_conv(eeg, nirs) # [16, 128] = [B, E]
 		eeg_s_token = self.eeg_common_conv(eeg) # [16, 128] = [B, E]
 		nirs_s_token = self.nirs_common_conv(nirs)
-		disentangle_loss = self.cosine_loss(eeg_s_token, eeg_p_token) + self.cosine_loss(nirs_s_token, nirs_p_token)
+		disentangling_loss = self.cosine_loss(eeg_s_token, eeg_p_token) + self.cosine_loss(nirs_s_token, nirs_p_token)
 		
 		# EEG private codebook
 		eeg_quan_outputs = self.eeg_quantizer(eeg_p_token)
@@ -245,9 +252,9 @@ class EF_Book(nn.Module):
 		quan_eeg = quan_eeg + quan_fusion_eeg
 		quan_nirs = quan_nirs + quan_fusion_nirs
 		outputs = self.classifier(eeg_token, nirs_token, quan_eeg, quan_nirs)
-		quan_loss = 0.5 * disentangle_loss + eeg_quan_loss + nirs_quan_loss + 0.5 * fusion_quan_loss
+		codebook_loss = eeg_quan_loss + nirs_quan_loss + 0.5 * fusion_quan_loss
 
 		return {
 			'outputs': outputs,
-			'quan_loss': quan_loss,
+			'loss': 1000 * disentangling_loss + 0.1 * codebook_loss,
 		}

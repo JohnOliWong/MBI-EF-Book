@@ -1,10 +1,6 @@
 from EF_Book_VQ import EF_Book as ef
-from EF_Book_SharedVQ import EF_Book as ef_sharedvq
-from EF_Book_PrivateVQ import EF_Book as ef_privatevq
-from EF_Book_NoVQ import EF_Book as ef_novq
-from EF_Book_EEG import EF_Book as ef_eeg
-from EF_Book_NIRS import EF_Book as ef_nirs
 from Dataloader_EF import read_ef_train_si as si_data
+from Dataloader_EF import read_wg_pkl_si as wg_data
 from Metrics import metrics, save_param
 from Visualization import Visualization as vis
 from Notification import send_yagmail
@@ -21,12 +17,14 @@ class Trainer:
 	def __init__(self, config):
 		self.config = config
 		self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+		self.mode = config['mode']
 
-		if config['model_id'] == 0:
-			self.model = ef(config['dict_len'], config['emb_size'], config['num_class'], config['threshold'], self.device).to(self.device).to(torch.float64)
-		
+		if mode == 0 or mode == 1:
+			self.model = ef(config['dict_len'], config['emb_size'], config['num_class'], self.mode, config['threshold'], self.device).to(self.device).to(torch.float32)
+		elif mode == 2:
+			self.model = ef(config['dict_len'], config['emb_size'], config['num_class'], self.mode, config['threshold'], self.device).to(self.device).to(torch.float32)
 		self.criterion = nn.CrossEntropyLoss()
-		self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config['learning_rate'], weight_decay=config['learning_rate'])
+		self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config['learning_rate'], weight_decay=0.2 * config['learning_rate'])
 		self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
 			self.optimizer,
 			mode='min',
@@ -62,7 +60,10 @@ class Trainer:
 		return train_dataset, test_dataset
 	
 	def train_subject(self, subject, mode):
-		train_dataset, eval_dataset = si_data(subject, mode)
+		if mode == 0 or mode == 1:
+			train_dataset, eval_dataset = si_data(subject, mode)
+		elif mode == 2:
+			train_dataset, eval_dataset = wg_data(subject, mode)
 		if self.config['z_score']:
 			train_dataset, eval_dataset = self.z_score_mm(train_dataset, eval_dataset)
 		train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.config['batch_size'], shuffle=True)
@@ -71,23 +72,38 @@ class Trainer:
 		best_acc = 0
 		train_loss_list, train_acc_list = [], []
 		loss_list, acc_list, precision_list, recall_list, f1_list, kappa_list = [], [], [], [], [], []
+		wu_lr = self.config['learning_rate'] / 10
+		base_lr = self.config['learning_rate']
+		current_lr, warm_up = base_lr, self.config['warm_up']
 		for epoch in range(self.config['num_epochs']):
 			#----------Training----------
 			self.model.train()
 			total_correct, total_loss = 0, 0
 
+			# warm-up epochs
+			if epoch < warm_up:
+				current_lr = wu_lr
+				for param_group in self.optimizer.param_groups:
+					param_group['lr'] = current_lr
+			else:
+				# after warm-up, let scheduler adjust the learning rate
+				if epoch == warm_up:
+					for param_group in self.optimizer.param_groups:
+						param_group['lr'] = base_lr
+				current_lr = self.optimizer.param_groups[0]['lr']
+
 			num_batch = len(train_loader)
 			for i, (batch_eeg, batch_nirs, batch_labels) in enumerate(train_loader):
-				batch_eeg = batch_eeg.to(self.device, dtype=torch.float64)
-				batch_nirs = batch_nirs.to(self.device, dtype=torch.float64)
+				batch_eeg = batch_eeg.to(self.device, dtype=torch.float32)
+				batch_nirs = batch_nirs.to(self.device, dtype=torch.float32)
 				batch_labels = batch_labels.to(self.device)
 				last_batch = (i == num_batch - 1)
 				
 				model_output = self.model(batch_eeg, batch_nirs, last_batch=last_batch)
 				outputs = model_output['outputs']
-				quan_loss = model_output['quan_loss']
+				quan_loss = model_output['loss']
 				cls_loss = self.criterion(outputs, batch_labels.long())
-				loss = cls_loss + self.config['quan_lambda'] * quan_loss
+				loss = cls_loss + quan_loss
 				self.optimizer.zero_grad()
 				loss.backward()
 				self.optimizer.step()
@@ -108,15 +124,15 @@ class Trainer:
 			
 			with torch.no_grad():
 				for eval_eeg, eval_nirs, eval_labels in eval_loader:
-					eval_eeg = eval_eeg.to(self.device, dtype=torch.float64)
-					eval_nirs = eval_nirs.to(self.device, dtype=torch.float64)
+					eval_eeg = eval_eeg.to(self.device, dtype=torch.float32)
+					eval_nirs = eval_nirs.to(self.device, dtype=torch.float32)
 					eval_labels = eval_labels.to(self.device)
 					
 					model_output = self.model(eval_eeg, eval_nirs, last_batch=False)
 					outputs = model_output['outputs']
-					quan_loss = model_output['quan_loss']
+					quan_loss = model_output['loss']
 					cls_loss = self.criterion(outputs, eval_labels.long())
-					loss = cls_loss + self.config['quan_lambda'] * quan_loss
+					loss = cls_loss + quan_loss
 					total_loss += loss.item()
 					
 					preds = torch.argmax(outputs, dim=1)
@@ -126,7 +142,7 @@ class Trainer:
 					all_labels.extend(eval_labels.cpu().numpy())
 			
 			eval_loss = total_loss / len(eval_loader)
-			self.scheduler.step(loss)
+			self.scheduler.step(eval_loss)
 			eval_acc = total_correct / len(eval_loader.dataset)
 			if eval_acc > best_acc:
 				best_acc = eval_acc
@@ -175,22 +191,22 @@ config = {
 	'mi_root': '../../Dataset/EF-MI-MA/MI/',
 	'ma_root': '../../Dataset/EF-MI-MA/MA/',
 	'wg_root' : '../../Dataset/EF-WG/WG/',
-	'dict_len': 2048,
+	'dict_len': 1800,
 	'emb_size': 64,
 	'threshold': 60,
 	'batch_size': 32,
-	'num_epochs': 5,
+	'warm_up': 10,
+	'num_epochs': 100,
 	'learning_rate': 1e-3,
-	'quan_lambda': 0.1,
-	'mode': 0,
-	'model_id': 0,
-	'exp_name': '8022/',
+	'mode': 1,
+	'exp_name': '8102/',
 	'z_score': True,
 }
 
 # Instantiate trainer
 mode = config['mode']
-num_subject = 1
+# num_subject = 3
+num_subject = (29 if mode == 0 or mode == 1 else 26)
 results_root = 'Results/' + config['exp_name']
 seeds, total_labels, total_preds = [], [], []
 for subject in range(1, num_subject+1):

@@ -40,7 +40,7 @@ class Quantization(nn.Module):
 	m: summation of continuous features matched to the current codeword [D, E]
 	status: reflect if a codeword is active or not [D,]
 	'''
-	def __init__(self, dict_len, emb_size, decay=0.99, quan_weight=1.0, ot_weight=1.0, threshold=40):
+	def __init__(self, dict_len, emb_size, decay=0.99, quan_weight=1.0, ot_weight=1.0, threshold=60):
 		super().__init__()
 		self.dict_len = dict_len
 		self.emb_size = emb_size
@@ -63,15 +63,20 @@ class Quantization(nn.Module):
 		quan_token = cont_features + (quan_token - cont_features).detach()
 		
 		# codebook variables are only updated during training
+		usage = None
 		if self.training:
-			self.codebook_update(cont_features, quan_idx)
+			usage = self.codebook_update(cont_features, quan_idx)
 
 		vq_loss = F.mse_loss(cont_features.detach(), quan_token)
 		commit_loss = F.mse_loss(cont_features, quan_token.detach())
 		quan_loss = vq_loss + commit_loss
 		ot_loss = self.ot_loss(cont_features, quan_idx)
 		codebook_loss = self.quan_weight * quan_loss + self.ot_weight * ot_loss
-		return quan_token, codebook_loss
+
+		if usage is not None:
+			return {'usage': usage, 'quan_token': quan_token, 'codebook_loss': codebook_loss}
+		else:
+			return {'quan_token': quan_token, 'codebook_loss': codebook_loss}
 	
 	def codebook_update(self, features, indices):
 		with torch.no_grad():
@@ -80,6 +85,7 @@ class Quantization(nn.Module):
 			one_hot = F.one_hot(indices, num_classes=len(self.codebook)).float() # [2 * B, D]
 			counts = one_hot.sum(dim=[0]) # [D]
 			matched = (counts > 0)
+			usage = torch.count_nonzero(matched)
 			
 			if matched.any():
 				# summation of fine-grained representations matched to the corresponding codeword
@@ -93,6 +99,7 @@ class Quantization(nn.Module):
 			self.status[inactive] += 1
 			if (self.status >= self.threshold).any():
 				self.codeword_replace()
+			return usage
 
 	def codeword_replace(self):
 		inactive = (self.status >= self.threshold)
@@ -181,33 +188,61 @@ class Cosine_Loss(nn.Module):
 
 
 class EF_Book(nn.Module):
-	def __init__(self, dict_len, emb_size, num_class, threshold, device):
+	def __init__(self, dict_len, emb_size, num_class, mode, threshold, device):
 		super().__init__()
-
 		self.emb_size = emb_size
+		if mode == 0 or mode == 1:
+			self.EEG_Width = 4000
+			self.NIRS_Width = 200
+		elif mode == 2:
+			self.EEG_Width = 2000
+			self.NIRS_Width = 100
 		self.num_TConv = 4
 		self.num_SConv = 8
+		
 		self.ef_conv = Encoder_EF(depth=4, query_size=emb_size, key_size=emb_size, value_size=emb_size, emb_size=emb_size, num_heads=4, expansion=2, conv_dropout=0.3,
-                 				  self_dropout=0.3, cross_dropout=0.3, cls_dropout=0.5, num_classes=num_class, device=device)
-		self.eeg_common_conv = Encoder_Common(num_class, emb_size, T_Width=4000, S_Height=30, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
-		self.nirs_common_conv = Encoder_Common(num_class, emb_size, T_Width=200, S_Height=72, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
+                 				  self_dropout=0.3, cross_dropout=0.3, cls_dropout=0.5, num_classes=num_class, mode=mode, device=device)
+		self.eeg_common_conv = Encoder_Common(num_class, emb_size, T_Width=self.EEG_Width, S_Height=30, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
+		self.nirs_common_conv = Encoder_Common(num_class, emb_size, T_Width=self.NIRS_Width, S_Height=72, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
 
 		self.eeg_quantizer = Quantization(dict_len, self.emb_size, threshold=threshold)
 		self.nirs_quantizer = Quantization(dict_len, self.emb_size, threshold=threshold)
 		self.fusion_quantizer = Quantization(dict_len, self.emb_size, threshold=threshold)
 		self.cosine_loss = Cosine_Loss()
 		self.ega = EGA(emb_size)
-		# self.classifier = Classifier(emb_size, num_class)
-		self.classifier = nn.Linear(emb_size, num_class)
+		self.classifier = Classifier(emb_size, num_class)
 
-	def forward(self, eeg, nirs):
+	def forward(self, eeg, nirs, last_batch):
 		eeg_p_token, nirs_p_token = self.ef_conv(eeg, nirs) # [16, 128] = [B, E]
-		quan_nirs, nirs_quan_loss = self.nirs_quantizer(nirs_p_token)
+		eeg_s_token = self.eeg_common_conv(eeg) # [16, 128] = [B, E]
+		nirs_s_token = self.nirs_common_conv(nirs)
+		disentangle_loss = self.cosine_loss(nirs_s_token, nirs_p_token)
 
+		# fNIRS private codebook
+		nirs_quan_outputs = self.nirs_quantizer(nirs_p_token)
+		nirs_quan_usage = None
+		if len(nirs_quan_outputs) == 3:
+			nirs_quan_usage = nirs_quan_outputs['usage']
+		quan_nirs, nirs_quan_loss = nirs_quan_outputs['quan_token'], nirs_quan_outputs['codebook_loss']
+		
+		# EEG-fNIRS shared codebook
+		batch_size = nirs_p_token.shape[0]
+		nirs_s_token = self.ega(eeg_s_token, nirs_s_token)
+		fusion_features = torch.cat([eeg_s_token, nirs_s_token], dim=0)
+		fusion_quan_outputs = self.fusion_quantizer(fusion_features)
+		fusion_quan_usage = None
+		if len(fusion_quan_outputs) == 3:
+			fusion_quan_usage = fusion_quan_outputs['usage']
+		quan_fusion, fusion_quan_loss = fusion_quan_outputs['quan_token'], fusion_quan_outputs['codebook_loss']
+		quan_fusion_eeg, quan_fusion_nirs = quan_fusion[:batch_size, :], quan_fusion[batch_size:, :]
+		if last_batch and nirs_quan_usage is not None:
+			print(f'Codebook Usage: fNIRS {nirs_quan_usage} Shared {fusion_quan_usage}')
+		
+		# classification
 		nirs_token = nirs_p_token
-		quan_nirs = quan_nirs
-		outputs = self.classifier(nirs_token+quan_nirs)
-		quan_loss = nirs_quan_loss
+		quan_nirs = quan_nirs + quan_fusion_nirs
+		outputs = self.classifier(nirs_token, nirs_token, quan_nirs, quan_nirs)
+		quan_loss = 0.5 * disentangle_loss + nirs_quan_loss + 0.5 * fusion_quan_loss
 
 		return {
 			'outputs': outputs,

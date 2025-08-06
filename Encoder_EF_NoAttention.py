@@ -262,7 +262,7 @@ class Transformer(nn.Module):
         return eeg_temporal_outputs[:, 0], nirs_temporal_outputs[:, 0]
 
 
-class Encoder_EF(nn.Module):
+class Encoder_EF_NoAttention(nn.Module):
     def __init__(self, depth, query_size, key_size, value_size, emb_size, num_heads, expansion, conv_dropout,
                  self_dropout, cross_dropout, cls_dropout, num_classes, mode, device):
         super().__init__()

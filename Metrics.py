@@ -17,13 +17,13 @@ def metrics(log_root, data):
 	
 	print('Logging Completed')
 
-def save_param(results_root, config, seeds):
+def save_param(results_root, params, seeds):
 	log_root = results_root + 'Params.json'
 	if not os.path.exists(log_root):
 		os.makedirs(os.path.dirname(log_root), exist_ok=True)
 	data = {
 		'results_root': results_root,
-		'config': config,
+		'params': params,
 		'seeds': seeds,
 	}
 	with open(log_root, 'w', encoding='utf-8') as f:
@@ -33,6 +33,6 @@ def load_param(results_root):
 	log_root = results_root + 'Params.json'
 	with open(log_root, 'r', encoding='utf-8') as f:
 		data = json.load(f)
-	config = data['config']
-	seeds  =data['seeds']
-	return config, seeds
+	params = data['params']
+	seeds = data['seeds']
+	return params, seeds

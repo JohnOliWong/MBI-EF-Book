@@ -1,6 +1,17 @@
-from EF_Book_VQ import EF_Book as ef
 from Dataloader_EF import read_ef_train_si as si_data
 from Dataloader_EF import read_wg_pkl_si as wg_data
+
+from Baselines.EEGNet import EEGNet
+from Baselines.Conformer import Conformer
+from Baselines.fNIRST import fNIRS_T
+from Baselines.fNIRSNet import fNIRSNet
+from Baselines.CAFNet import CAFNet
+from Baselines.EF_Net import EF_Net
+from Baselines.VigilanceNet import VigilanceNet
+from Baselines.TMMF import HybridTransformer
+from EFBook.EF_Book_VQ import EF_Book as EF_VQ
+
+from Args import get_args
 from Metrics import metrics, save_param
 from Visualization import Visualization as vis
 from Notification import send_yagmail
@@ -14,26 +25,45 @@ import time
 
 
 class Trainer:
-	def __init__(self, config):
-		self.config = config
+	def __init__(self, args):
+		self.args = args
 		self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-		self.mode = config['mode']
+		self.model = args.model
+		self.mode = args.mode
 
-		if mode == 0 or mode == 1:
-			self.model = ef(config['dict_len'], config['emb_size'], config['num_class'], self.mode, config['threshold'], self.device).to(self.device).to(torch.float32)
-		elif mode == 2:
-			self.model = ef(config['dict_len'], config['emb_size'], config['num_class'], self.mode, config['threshold'], self.device).to(self.device).to(torch.float32)
+		if self.model == 'EEGNet':
+			self.model = EEGNet().to(self.device).to(torch.float32)
+		elif self.model == 'Conformer':
+			if self.mode != 2:
+				self.model = Conformer(emb_size=60, depth=4, n_classes=config['num_classes']).to(self.device).to(torch.float32)
+			else:
+				self.model = Conformer(emb_size=60, depth=6, n_classes=config['num_classes']).to(self.device).to(torch.float32)
+		elif self.model == 'fNIRS-T':
+			self.model = fNIRS_T().to(self.device).to(torch.float32)
+		elif self.model == 'fNIRS-Net':
+			self.model = fNIRSNet().to(self.device).to(torch.float32)
+		elif self.model == 'CAF-Net':
+			self.model = CAFNet().to(self.device).to(torch.float32)
+		elif self.model == 'EF-Net':
+			self.model = EF_Net().to(self.device).to(torch.float32)
+		elif self.model == 'Vigilance-Net':
+			self.model = VigilanceNet().to(self.device).to(torch.float32)
+		elif self.model == 'TSMMF':
+			self.model = HybridTransformer().to(self.device).to(torch.float32)
+		elif self.model == 'EF-Book':
+			self.model = EF_VQ(args.dict_len, args.emb_size, args.num_class, self.mode, args.threshold, self.device).to(self.device).to(torch.float32)
+		
 		self.criterion = nn.CrossEntropyLoss()
-		self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config['learning_rate'], weight_decay=0.2 * config['learning_rate'])
+		self.optimizer = torch.optim.Adam(self.model.parameters(), lr=args.learning_rate, weight_decay=0.2 * args.learning_rate)
 		self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
 			self.optimizer,
 			mode='min',
 			factor=0.8,
 			patience=5,
-			min_lr=0.1*config['learning_rate'],
+			min_lr=0.1 * args.learning_rate,
 		)
 
-		self.results_root = 'Results/' + config['exp_name']
+		self.results_root = 'Results/' + args.exp_name
 		os.makedirs(self.results_root, exist_ok=True)
 	
 	def z_score_mm(self, train_dataset, test_dataset, eps=1e-6):
@@ -64,18 +94,18 @@ class Trainer:
 			train_dataset, eval_dataset = si_data(subject, mode)
 		elif mode == 2:
 			train_dataset, eval_dataset = wg_data(subject, mode)
-		if self.config['z_score']:
+		if self.args.z_score:
 			train_dataset, eval_dataset = self.z_score_mm(train_dataset, eval_dataset)
-		train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.config['batch_size'], shuffle=True)
-		eval_loader = torch.utils.data.DataLoader(eval_dataset, batch_size=self.config['batch_size'], shuffle=False)
+		train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.args.batch_size, shuffle=True)
+		eval_loader = torch.utils.data.DataLoader(eval_dataset, batch_size=self.args.batch_size, shuffle=False)
 	
 		best_acc = 0
 		train_loss_list, train_acc_list = [], []
 		loss_list, acc_list, precision_list, recall_list, f1_list, kappa_list = [], [], [], [], [], []
-		wu_lr = self.config['learning_rate'] / 10
-		base_lr = self.config['learning_rate']
-		current_lr, warm_up = base_lr, self.config['warm_up']
-		for epoch in range(self.config['num_epochs']):
+		wu_lr = self.args.learning_rate / 10
+		base_lr = self.args.learning_rate
+		current_lr, warm_up = base_lr, self.args.warm_up
+		for epoch in range(self.args.num_epochs):
 			#----------Training----------
 			self.model.train()
 			total_correct, total_loss = 0, 0
@@ -159,7 +189,7 @@ class Trainer:
 			f1_list.append(f1)
 			kappa_list.append(kappa)
 			
-			print(f"Subject {subject} | Epoch {epoch+1}/{self.config['num_epochs']} | LR {self.optimizer.param_groups[0]['lr']}")
+			print(f"Subject {subject} | Epoch {epoch+1}/{self.args.num_epochs} | LR {self.optimizer.param_groups[0]['lr']}")
 			print(f"Train Loss: {train_loss:.2f} | Train Acc: {train_acc:.2f} | Eval Loss: {eval_loss:.2f} | Eval Acc: {eval_acc:.2f}")
 
 		train_acc_list = [acc * 100 for acc in train_acc_list]
@@ -167,9 +197,6 @@ class Trainer:
 		precision_list = [precision * 100 for precision in precision_list]
 		recall_list = [recall * 100 for recall in recall_list]
 		f1_list = [f1 * 100 for f1 in f1_list]
-
-		# self.vis = vis(subject, mode, self.results_root)
-		# self.vis.plot_all(train_loss_list, train_acc_list, loss_list, acc_list, all_labels, all_preds)
 
 		data = {
 			'Train_Loss': train_loss_list,
@@ -185,33 +212,22 @@ class Trainer:
 		metrics(log_root, data)
 		return all_labels, all_preds
 
-# Hyperparameters
-config = {
-	'num_class': 2,
-	'mi_root': '../../Dataset/EF-MI-MA/MI/',
-	'ma_root': '../../Dataset/EF-MI-MA/MA/',
-	'wg_root' : '../../Dataset/EF-WG/WG/',
-	'dict_len': 1800,
-	'emb_size': 64,
-	'threshold': 60,
-	'batch_size': 32,
-	'warm_up': 10,
-	'num_epochs': 100,
-	'learning_rate': 1e-3,
-	'mode': 1,
-	'exp_name': '8102/',
-	'z_score': True,
-}
+args = get_args()
 
-# Instantiate trainer
-mode = config['mode']
-# num_subject = 3
+# use either a predefined string or the timestamp as the folder name to store the results
+# exp_name = args.exp_name
+start_time = time.time()
+curr_time = time.strftime('%b-%d-%Y-%H:%M:%S', time.localtime(start_time))
+exp_name = f'{args.model}_{curr_time}'
+
+results_root = 'Results/' + exp_name
+
+# mode 0: MI, mode 1: MA, mode 2: WG
+mode = args.mode
 num_subject = (29 if mode == 0 or mode == 1 else 26)
-results_root = 'Results/' + config['exp_name']
 seeds, total_labels, total_preds = [], [], []
 for subject in range(1, num_subject+1):
 	seed = 42
-	# seed = random.randint(1, 2025)
 	seeds.append(seed)
 	torch.manual_seed(seed)
 	torch.cuda.manual_seed_all(seed)
@@ -220,7 +236,7 @@ for subject in range(1, num_subject+1):
 	print(f"\n=== Subject {subject} ===")
 	print(f'Started {start_time_string}')
 	print(f'Seed is {seed}')
-	trainer = Trainer(config)
+	trainer = Trainer(args)
 	all_labels, all_preds = trainer.train_subject(subject, mode)
 	total_labels.append(all_labels)
 	total_preds.append(all_preds)
@@ -228,10 +244,15 @@ for subject in range(1, num_subject+1):
 	end_time_string = time.strftime('%b %d %Y %H:%M:%S', time.localtime(end_time))
 	print(f'Ended {end_time_string} Duration {end_time-start_time} s')
 
-# Save parameters
-save_param(results_root, config, seeds)
+# export parameters
+params = args.__dict__
+save_param(results_root, params, seeds)
 total_labels = np.array(total_labels).reshape(-1)
 total_preds = np.array(total_preds).reshape(-1)
+
+# visualization
 cm_visual = vis(subject, mode, results_root)
 cm_visual.plot_cm_all(total_labels, total_preds)
-send_yagmail(config['exp_name'].split('/')[-2])
+
+# send email upon the completion of training
+send_yagmail(args.exp_name.split('/')[-2])

@@ -7,7 +7,7 @@ from scipy.io import loadmat as load
 import numpy as np
 from scipy.signal import butter, lfilter
 
-from DualConvLayer import SpatialConvLayer, TemporalConvLayer
+from Baselines.DualConvLayer import SpatialConvLayer, TemporalConvLayer
 
 
 class PositionalEmbedding(nn.Module):

@@ -1,10 +1,17 @@
-from EF_Book_VQ import EF_Book as ef
-from EF_Book_SharedVQ import EF_Book as ef_sharedvq
-from EF_Book_PrivateVQ import EF_Book as ef_privatevq
-from EF_Book_NoVQ import EF_Book as ef_novq
-from EF_Book_EEG import EF_Book as ef_eeg
-from EF_Book_NIRS import EF_Book as ef_nirs
 from Dataloader_EF import read_ef_train_si as si_data
+from Dataloader_EF import read_wg_pkl_si as wg_data
+
+from Baselines.EEGNet import EEGNet
+from Baselines.Conformer import Conformer
+from Baselines.fNIRST import fNIRS_T
+from Baselines.fNIRSNet import fNIRSNet
+from Baselines.CAFNet import CAFNet
+from Baselines.EF_Net import EF_Net
+from Baselines.VigilanceNet import VigilanceNet
+from Baselines.TMMF import HybridTransformer
+from EFBook.EF_Book_VQ import EF_Book as EF_VQ
+
+import argparse
 from Metrics import metrics, load_param
 
 import torch
@@ -16,31 +23,91 @@ from pathlib import Path
 
 
 class Trainer:
-	def __init__(self, config):
-		self.config = config
+	def __init__(self, args):
+		self.args = args
 		self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+		self.model = args.model
+		self.mode = args.mode
 
-		if config['model_id'] == 0:
-			self.model = ef(config['dict_len'], config['emb_size'], config['num_class'], config['threshold'], self.device).to(self.device).to(torch.float64)
-		elif config['model_id'] == 1:
-			self.model = ef_sharedvq(config['dict_len'], config['emb_size'], config['num_class'], config['threshold'], self.device).to(self.device).to(torch.float64)
-		elif config['model_id'] == 2:
-			self.model = ef_privatevq(config['dict_len'], config['emb_size'], config['num_class'], config['threshold'], self.device).to(self.device).to(torch.float64)
-		elif config['model_id'] == 3:
-			self.model = ef_novq(config['dict_len'], config['emb_size'], config['num_class'], config['threshold'], self.device).to(self.device).to(torch.float64)
-		elif config['model_id'] == 4:
-			self.model = ef_eeg(config['dict_len'], config['emb_size'], config['num_class'], config['threshold'], self.device).to(self.device).to(torch.float64)
-		elif config['model_id'] == 5:
-			self.model = ef_nirs(config['dict_len'], config['emb_size'], config['num_class'], config['threshold'], self.device).to(self.device).to(torch.float64)
+		if self.model == 'EEGNet':
+			if self.mode != 2:
+				self.model = EEGNet(C=30, T=4000, num_classes=args.num_classes, 
+									f1=8, depth=4, f2=4).to(self.device).to(torch.float32)
+			else:
+				self.model = EEGNet(C=30, T=2000, num_classes=args.num_classes, 
+									f1=8, depth=4, f2=4).to(self.device).to(torch.float32)
+		
+		elif self.model == 'Conformer':
+			if self.mode != 2:
+				self.model = Conformer(emb_size=60, depth=4, 
+						      		   n_classes=args.num_classes).to(self.device).to(torch.float32)
+			else:
+				self.model = Conformer(emb_size=60, depth=6, 
+						   			   n_classes=args.num_classes).to(self.device).to(torch.float32)
+		
+		elif self.model == 'fNIRS-T':
+			if self.mode != 2:
+				self.model = fNIRS_T(n_class=args.num_classes, sampling_point=200, dim=64, depth=6, 
+						 			 heads=8, mlp_dim=64).to(self.device).to(torch.float32)
+			else:
+				self.model = fNIRS_T(n_class=args.num_classes, sampling_point=100, dim=64, depth=6, 
+						 			 heads=8, mlp_dim=64).to(self.device).to(torch.float32)
+
+		elif self.model == 'fNIRS-Net':
+			if self.mode != 2:
+				self.model = fNIRSNet(num_class=args.num_classes, DHRConv_width=200, DWConv_height=72, 
+						  			  num_DHRConv=4, num_DWConv=8).to(self.device, dtype=torch.float32)
+			elif self.mode == 2:
+				self.model = fNIRSNet(num_class=args.num_classes, DHRConv_width=100, DWConv_height=72, 
+						  			  num_DHRConv=4, num_DWConv=8).to(self.device, dtype=torch.float32)
+
+		elif self.model == 'CAF-Net':
+			if self.mode != 2:
+				self.model = CAFNet(eeg_dim=4000, nirs_dim=200, hidden_size=128, num_layers=8, 
+									dim=128, heads=1, dim_head=128, mlp_dim=64, 
+									num_classes=2, dropout=0.25).to(self.device, dtype=torch.float32)
+			elif self.mode == 2:
+				self.model = CAFNet(eeg_dim=2000, nirs_dim=100, hidden_size=128, num_layers=4, 
+									dim=128, heads=1, dim_head=128, mlp_dim=64, 
+									num_classes=2, dropout=0.25).to(self.device, dtype=torch.float32)
+		
+		elif self.model == 'EF-Net':
+			self.model = EF_Net(num_classes=args.num_classes, mode=args.mode).to(self.device)
+		
+		elif self.model == 'Vigilance-Net':
+			if self.mode != 2:
+				self.model = VigilanceNet(hidden_size=64, num_heads=4, ffn_dim=128, 
+										  attn_drop=0.25, proj_drop=0.25, feed_drop=0.25, 
+										  num_classes=args.num_classes, mode=self.mode
+										  ).to(self.device, dtype=torch.float32)
+			elif self.mode == 2:
+				self.model = VigilanceNet(hidden_size=64, num_heads=4, ffn_dim=128, 
+							  			  attn_drop=0.25, proj_drop=0.25, feed_drop=0.25, 
+										  num_classes=args.num_classes, mode=self.mode
+										  ).to(self.device, dtype=torch.float32)
+
+		elif self.model == 'TSMMF':
+			self.model = HybridTransformer(
+				args.depth, args.query_size, args.key_size, args.value_size,
+				args.emb_size, args.num_heads, args.expansion,
+				args.conv_dropout, args.self_dropout, args.cross_dropout, args.cls_dropout,
+				args.num_classes, args.mode, self.device,
+			).to(self.device).to(torch.float32)
+		
+		elif self.model == 'EF-Book':
+			self.model = EF_VQ(args.dict_len, args.emb_size, args.threshold, 
+					  		   args.num_class, self.mode, self.device).to(self.device).to(torch.float32)
 
 		self.criterion = nn.CrossEntropyLoss()
-		self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config['learning_rate'], weight_decay=config['learning_rate'])
+		weight_decay = 0.2 * args.learning_rate
+		min_lr = 0.1 * args.learning_rate
+		self.optimizer = torch.optim.Adam(self.model.parameters(), lr=args.learning_rate, weight_decay=weight_decay)
 		self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
 			self.optimizer,
 			mode='min',
 			factor=0.8,
 			patience=5,
-			min_lr=0.1*config['learning_rate'],
+			min_lr=min_lr,
 		)
 
 		os.makedirs('Results', exist_ok=True)
@@ -98,19 +165,21 @@ class Trainer:
 	
 	def test_subject(self, results_root, subject, mode):
 		train_dataset, eval_dataset = si_data(subject, mode)
-		if config['z_score']:
+		if self.args.z_score:
 			train_dataset, eval_dataset = self.z_score_mm(train_dataset, eval_dataset)
-		eval_loader = torch.utils.data.DataLoader(eval_dataset, batch_size=self.config['batch_size'], shuffle=False)
+		eval_loader = torch.utils.data.DataLoader(eval_dataset, batch_size=self.args.batch_size, shuffle=False)
 		eval_acc, precision, recall, f1, kappa = self.evaluate_epoch(results_root, subject, eval_loader)
 		print(f"Subject {subject} | Eval Acc: {eval_acc:.2f}")
 
 		return eval_acc, precision, recall, f1, kappa
 
 # Load parameters
-exp_name = '8014/'
+exp_name = '8001/'
 results_root = 'Results/' + exp_name
 config, seeds = load_param(results_root)
+args = argparse.Namespace(**config)
 results_path = Path(results_root)
+
 subject_list = sorted(
 	int(re.search(r'^(\d+)\.pt$', file.name).group(1))
 	for file in results_path.glob('*.pt')
@@ -120,13 +189,12 @@ subject_list = sorted(
 acc_list, precision_list, recall_list, f1_list, kappa_list = [], [], [], [], []
 for i, subject in enumerate(subject_list):
 	seed = seeds[i]
-	# seed = random.randint(1, 2025)
 	torch.manual_seed(seed)
 	torch.cuda.manual_seed_all(seed)
 	print(f"\n=== Subject {subject} ===")
 	print(f'Seed is {seed}')
-	trainer = Trainer(config)
-	eval_acc, precision, recall, f1, kappa = trainer.test_subject(results_root, subject, config['mode'])
+	trainer = Trainer(args)
+	eval_acc, precision, recall, f1, kappa = trainer.test_subject(results_root, subject, args.mode)
 	acc_list.append(eval_acc)
 	precision_list.append(precision)
 	recall_list.append(recall)

@@ -22,8 +22,8 @@ class DWSConv(nn.Module):
 # EEG Temporal Convolution
 class EEGTemporalConvLayer(nn.Module):
     def __init__(self, emb_size, dropout, bias=False):
-        self.dropout = dropout
         super().__init__()
+        self.dropout = 0.3
 
         # kernel size for pooling
         pooling_kernel = [4, 1, 5]
@@ -58,9 +58,7 @@ class EEGTemporalConvLayer(nn.Module):
 
     def forward(self, eeg):
         if eeg.ndim == 3:
-            # insert a new dimension in dim=1, i.e. (60, 30, 4000) -> (60, 1, 30, 4000)
             eeg = eeg.unsqueeze(1)
-
         eeg = self.eeg_block1(eeg)
         eeg = self.eeg_block2(eeg)
         eeg = self.eeg_block3(eeg)
@@ -70,7 +68,8 @@ class EEGTemporalConvLayer(nn.Module):
 class NIRSTemporalConvLayer(nn.Module):
     def __init__(self, emb_size, dropout, bias=False):
         super().__init__()
-        
+        self.dropout = 0.3
+
         # kernel size for pooling
         pooling_kernel = [2, 1, 2]
         self.dropout = dropout
@@ -103,13 +102,11 @@ class NIRSTemporalConvLayer(nn.Module):
         )
 
     def forward(self, nirs):
-        nirs = nirs[:, :, :]
         if nirs.ndim == 3:
             nirs = nirs.unsqueeze(1)
         nirs = self.nirs_block1(nirs)
         nirs = self.nirs_block2(nirs)
         nirs = self.nirs_block3(nirs)
-
         return nirs
 
 
@@ -130,8 +127,8 @@ class Positional_Embedding(nn.Module):
     def __init__(self, channels, emb_size, device):
         super().__init__()
         self.channels = channels + 1
-        self.pos_emb = nn.Parameter(torch.randn(size=(1, self.channels, emb_size), dtype=torch.float32, device=device),
-                                    requires_grad=True)
+        self.pos_emb = nn.Parameter(torch.randn(size=(1, self.channels, emb_size), 
+                                                dtype=torch.float32, device=device), requires_grad=True)
 
     def forward(self, x):
         x = self.pos_emb + x
@@ -269,6 +266,7 @@ class Encoder_EF(nn.Module):
         self.temporal_conv_layer = TemporalConvLayer(emb_size, conv_dropout)
  
         with torch.no_grad():
+            print(mode)
             if mode == 0 or mode == 1:
                 eeg, nirs = torch.randn(1, 30, 4000), torch.randn(1, 72, 200)
             elif mode == 2:
@@ -276,13 +274,21 @@ class Encoder_EF(nn.Module):
             eeg_token, nirs_token = self.temporal_conv_layer(eeg, nirs)
             channels = [eeg_token.shape[-1], nirs_token.shape[-1]]
 
+            # time / 20, time / 4
+            print(channels)
+
         self.transformer = Transformer(depth, query_size, key_size, value_size, emb_size, num_heads, channels,
                                        expansion, device, self_dropout, cross_dropout)
 
     def forward(self, eeg, nirs):
+        # eeg/nirs.shape = bz, 1, channel, time
         temporal_eeg, temporal_nirs = self.temporal_conv_layer(eeg, nirs)
+        
+        # temporal_eeg.shape = bz, emb_size, 1, time / 20 > bz, time / 20, emb_size
+        # temporal_nirs.shape = bz, emb_size, 1, time / 4 > bz, time / 4, emb_size
         temporal_eeg = temporal_eeg.squeeze(-2).permute(0, 2, 1)
         temporal_nirs = temporal_nirs.squeeze(-2).permute(0, 2, 1)
+
         eeg_token, nirs_token = self.transformer(temporal_eeg, temporal_nirs)
 
         return eeg_token, nirs_token

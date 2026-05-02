@@ -3,8 +3,8 @@ import torch.nn.functional as F
 from torch import nn
 import random
 
-from Encoder_EF import Encoder_EF
-from Encoder_Common import Encoder_Common
+from EFBook.Encoder_EF import Encoder_EF
+from EFBook.Encoder_Common import Encoder_Common
 
 
 class EGA(nn.Module):
@@ -189,7 +189,7 @@ class Cosine_Loss(nn.Module):
 
 
 class EF_Book(nn.Module):
-	def __init__(self, dict_len, emb_size, num_class, mode, threshold, device):
+	def __init__(self, dict_len, emb_size, threshold, num_class, mode, device):
 		super().__init__()
 		self.emb_size = emb_size
 		if mode == 0 or mode == 1:
@@ -201,10 +201,14 @@ class EF_Book(nn.Module):
 		self.num_TConv = 4
 		self.num_SConv = 8
 		
-		self.ef_conv = Encoder_EF(depth=4, query_size=emb_size, key_size=emb_size, value_size=emb_size, emb_size=emb_size, num_heads=4, expansion=2, conv_dropout=0.3,
-                 				  self_dropout=0.3, cross_dropout=0.3, cls_dropout=0.5, num_classes=num_class, mode=mode, device=device)
-		self.eeg_common_conv = Encoder_Common(num_class, emb_size, T_Width=self.EEG_Width, S_Height=30, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
-		self.nirs_common_conv = Encoder_Common(num_class, emb_size, T_Width=self.NIRS_Width, S_Height=72, num_TConv=self.num_TConv, num_SConv=self.num_SConv)
+		self.ef_conv = Encoder_EF(depth=4, query_size=emb_size, key_size=emb_size, value_size=emb_size, 
+							      emb_size=emb_size, num_heads=4, expansion=2, conv_dropout=0.3,
+                 				  self_dropout=0.3, cross_dropout=0.3, cls_dropout=0.5, 
+								  num_classes=num_class, mode=mode, device=device)
+		self.eeg_common_conv = Encoder_Common(num_class, emb_size, T_Width=self.EEG_Width, S_Height=30, 
+										      num_TConv=self.num_TConv, num_SConv=self.num_SConv)
+		self.nirs_common_conv = Encoder_Common(num_class, emb_size, T_Width=self.NIRS_Width, S_Height=72, 
+										       num_TConv=self.num_TConv, num_SConv=self.num_SConv)
 
 		self.eeg_quantizer = Quantization(dict_len, self.emb_size, threshold=threshold)
 		self.nirs_quantizer = Quantization(dict_len, self.emb_size, threshold=threshold)

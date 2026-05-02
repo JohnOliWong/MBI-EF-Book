@@ -21,13 +21,13 @@ class MultimodalDataset(Dataset):
 def read_ef_train_si(subject, mode):
 	'''
 	Training Set:
-	eeg.shape = [1680, 1, 4000, 30]
-	nirs.shape = [1680, 1, 200, 72]
+	eeg.shape = [1680, 1, 30, 4000]
+	nirs.shape = [1680, 1, 72, 200]
 	labels [1680,]
 
 	Testing Set:
-	eeg.shape = [60, 1, 4000, 30]
-	nirs.shape = [60, 1, 200, 72]
+	eeg.shape = [60, 1, 30, 4000]
+	nirs.shape = [60, 1, 72, 200]
 	labels [60,]
 	'''
 	num_sub = 29
@@ -39,9 +39,9 @@ def read_ef_train_si(subject, mode):
 
 	for i in range(1, num_sub+1):
 		if mode == 0:
-			data_root = '../../Dataset/EF-MI-MA/MI/' + str(i) + '.pkl'
+			data_root = '/data_main/junlin/BFM/Datasets/EF-MI/' + str(i) + '.pkl'
 		elif mode == 1:
-			data_root = '../../Dataset/EF-MI-MA/MA/' + str(i) + '.pkl'
+			data_root = '/data_main/junlin/BFM/Datasets/EF-MA/' + str(i) + '.pkl'
 		with open(data_root, 'rb') as f:
 			data = pickle.load(f)
 		eeg = data['eeg']
@@ -98,7 +98,7 @@ def read_wg_pkl_si(subject, mode):
 	training_labels = []
 
 	for i in range(1, num_sub+1):
-		data_root = '../../Dataset/EF-WG/WG/' + str(i) + '.pkl'
+		data_root = '/data_main/junlin/BFM/Datasets/EF-WG/WG/' + str(i) + '.pkl'
 		with open(data_root, 'rb') as f:
 			data = pickle.load(f)
 		eeg = data['eeg']

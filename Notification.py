@@ -8,9 +8,9 @@ import os
 
 
 def send_yagmail(exp_name):
-	smtp_servers = ['smtp.qq.com', 'smtp.office365.com', 'smtp.google.com']
-	emails = ['johnoliwong@foxmail.com', 'johnoliverwong@outlook.com', 'freeodmsino@gmail.com']
-	auth_codes = ['dtfzabqcbegehgbb', '+dSze$c5eJ1UFpZt\t6&', 'gopvvgmrkozomitu']
+	smtp_servers = ['smtp.qq.com']
+	emails = ['johnoliwong@foxmail.com']
+	auth_codes = ['dtfzabqcbegehgbb']
 	sender_id = 0
 	receiver_id = 0
 	smtp_server = smtp_servers[sender_id]
@@ -30,10 +30,10 @@ def send_yagmail(exp_name):
 	logger.info("Email Sent!")
 
 def send_mail():
-	smtp_servers = ['smtp.qq.com', 'smtp.office365.com', 'smtp.google.com']
+	smtp_servers = ['smtp.qq.com']
 	smtp_ports = [465, 587]
-	emails = ['1362027443@qq.com', 'johnoliwong@foxmail.com', 'johnoliverwong@outlook.com', 'freeodmsino@gmail.com', 'viheli8053@coderdir.com']
-	auth_codes = ['dtfzabqcbegehgbb', '+dSze$c5eJ1UFpZt\t6&', 'gopvvgmrkozomitu']
+	emails = ['johnoliwong@foxmail.com']
+	auth_codes = ['dtfzabqcbegehgbb']
 	sender_id = 1
 	receiver_id = 1
 	port_id = 0

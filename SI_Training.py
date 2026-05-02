@@ -25,45 +25,94 @@ import time
 
 
 class Trainer:
-	def __init__(self, args):
+	def __init__(self, args, exp_name):
 		self.args = args
 		self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-		self.model = args.model
+		self.model_name = args.model
 		self.mode = args.mode
 
-		if self.model == 'EEGNet':
-			self.model = EEGNet().to(self.device).to(torch.float32)
-		elif self.model == 'Conformer':
+		if self.model_name == 'EEGNet':
 			if self.mode != 2:
-				self.model = Conformer(emb_size=60, depth=4, n_classes=config['num_classes']).to(self.device).to(torch.float32)
+				self.model = EEGNet(C=30, T=4000, num_classes=args.num_class, 
+									f1=8, depth=4, f2=4).to(self.device).to(torch.float32)
 			else:
-				self.model = Conformer(emb_size=60, depth=6, n_classes=config['num_classes']).to(self.device).to(torch.float32)
-		elif self.model == 'fNIRS-T':
-			self.model = fNIRS_T().to(self.device).to(torch.float32)
-		elif self.model == 'fNIRS-Net':
-			self.model = fNIRSNet().to(self.device).to(torch.float32)
-		elif self.model == 'CAF-Net':
-			self.model = CAFNet().to(self.device).to(torch.float32)
-		elif self.model == 'EF-Net':
-			self.model = EF_Net().to(self.device).to(torch.float32)
-		elif self.model == 'Vigilance-Net':
-			self.model = VigilanceNet().to(self.device).to(torch.float32)
-		elif self.model == 'TSMMF':
-			self.model = HybridTransformer().to(self.device).to(torch.float32)
-		elif self.model == 'EF-Book':
-			self.model = EF_VQ(args.dict_len, args.emb_size, args.num_class, self.mode, args.threshold, self.device).to(self.device).to(torch.float32)
+				self.model = EEGNet(C=30, T=2000, num_classes=args.num_class, 
+									f1=8, depth=4, f2=4).to(self.device).to(torch.float32)
+		
+		elif self.model_name == 'Conformer':
+			if self.mode != 2:
+				self.model = Conformer(emb_size=60, depth=4, 
+						      		   n_classes=args.num_class).to(self.device).to(torch.float32)
+			else:
+				self.model = Conformer(emb_size=60, depth=6, 
+						   			   n_classes=args.num_class).to(self.device).to(torch.float32)
+		
+		elif self.model_name == 'fNIRS-T':
+			if self.mode != 2:
+				self.model = fNIRS_T(n_class=args.num_class, sampling_point=200, dim=64, depth=6, 
+						 			 heads=8, mlp_dim=64).to(self.device).to(torch.float32)
+			else:
+				self.model = fNIRS_T(n_class=args.num_class, sampling_point=100, dim=64, depth=6, 
+						 			 heads=8, mlp_dim=64).to(self.device).to(torch.float32)
+
+		elif self.model_name == 'fNIRS-Net':
+			if self.mode != 2:
+				self.model = fNIRSNet(num_class=args.num_class, DHRConv_width=200, DWConv_height=72, 
+						  			  num_DHRConv=4, num_DWConv=8).to(self.device, dtype=torch.float32)
+			elif self.mode == 2:
+				self.model = fNIRSNet(num_class=args.num_class, DHRConv_width=100, DWConv_height=72, 
+						  			  num_DHRConv=4, num_DWConv=8).to(self.device, dtype=torch.float32)
+
+		elif self.model_name == 'CAF-Net':
+			if self.mode != 2:
+				self.model = CAFNet(eeg_dim=4000, nirs_dim=200, hidden_size=128, num_layers=8, 
+									dim=128, heads=1, dim_head=128, mlp_dim=64, 
+									num_classes=2, dropout=0.25).to(self.device, dtype=torch.float32)
+			elif self.mode == 2:
+				self.model = CAFNet(eeg_dim=2000, nirs_dim=100, hidden_size=128, num_layers=4, 
+									dim=128, heads=1, dim_head=128, mlp_dim=64, 
+									num_classes=2, dropout=0.25).to(self.device, dtype=torch.float32)
+		
+		elif self.model_name == 'EF-Net':
+			self.model = EF_Net(num_classes=args.num_class, mode=args.mode).to(self.device)
+		
+		elif self.model_name == 'Vigilance-Net':
+			if self.mode != 2:
+				self.model = VigilanceNet(hidden_size=64, num_heads=4, ffn_dim=128, 
+										  attn_drop=0.25, proj_drop=0.25, feed_drop=0.25, 
+										  num_classes=args.num_class, mode=self.mode
+										  ).to(self.device, dtype=torch.float32)
+			elif self.mode == 2:
+				self.model = VigilanceNet(hidden_size=64, num_heads=4, ffn_dim=128, 
+							  			  attn_drop=0.25, proj_drop=0.25, feed_drop=0.25, 
+										  num_classes=args.num_class, mode=self.mode
+										  ).to(self.device, dtype=torch.float32)
+
+		elif self.model_name == 'TSMMF':
+			self.model = HybridTransformer(
+				args.depth, args.query_size, args.key_size, args.value_size,
+				args.emb_size, args.num_heads, args.expansion,
+				args.conv_dropout, args.self_dropout, args.cross_dropout, args.cls_dropout,
+				args.num_class, args.mode, self.device,
+			).to(self.device).to(torch.float32)
+		
+		elif self.model_name == 'EF-Book':
+			self.model = EF_VQ(args.dict_len, args.emb_size, args.threshold, 
+					  		   args.num_class, self.mode, self.device).to(self.device).to(torch.float32)
 		
 		self.criterion = nn.CrossEntropyLoss()
-		self.optimizer = torch.optim.Adam(self.model.parameters(), lr=args.learning_rate, weight_decay=0.2 * args.learning_rate)
+		weight_decay = 0.2 * args.learning_rate
+		min_lr = 0.1 * args.learning_rate
+		self.optimizer = torch.optim.Adam(self.model.parameters(), lr=args.learning_rate, weight_decay=weight_decay)
 		self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
 			self.optimizer,
 			mode='min',
 			factor=0.8,
 			patience=5,
-			min_lr=0.1 * args.learning_rate,
+			min_lr=min_lr,
 		)
 
-		self.results_root = 'Results/' + args.exp_name
+		self.results_root = 'Results/' + exp_name
 		os.makedirs(self.results_root, exist_ok=True)
 	
 	def z_score_mm(self, train_dataset, test_dataset, eps=1e-6):
@@ -99,6 +148,14 @@ class Trainer:
 		train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.args.batch_size, shuffle=True)
 		eval_loader = torch.utils.data.DataLoader(eval_dataset, batch_size=self.args.batch_size, shuffle=False)
 	
+		# kaiming init
+		init = True
+		def init_kaiming(m):
+			if type(m) == nn.Linear:
+				nn.init.kaiming_normal_(m.weight.data)
+		if init:
+			self.model.apply(init_kaiming)
+
 		best_acc = 0
 		train_loss_list, train_acc_list = [], []
 		loss_list, acc_list, precision_list, recall_list, f1_list, kappa_list = [], [], [], [], [], []
@@ -129,11 +186,15 @@ class Trainer:
 				batch_labels = batch_labels.to(self.device)
 				last_batch = (i == num_batch - 1)
 				
-				model_output = self.model(batch_eeg, batch_nirs, last_batch=last_batch)
-				outputs = model_output['outputs']
-				quan_loss = model_output['loss']
-				cls_loss = self.criterion(outputs, batch_labels.long())
-				loss = cls_loss + quan_loss
+				if self.model_name == 'EF-Book':
+					model_output = self.model(batch_eeg, batch_nirs, last_batch=last_batch)
+					outputs = model_output['outputs']
+					quan_loss = model_output['loss']
+					cls_loss = self.criterion(outputs, batch_labels.long())
+					loss = cls_loss + quan_loss
+				else:
+					outputs = self.model(batch_eeg, batch_nirs)
+					loss = self.criterion(outputs, batch_labels.long())
 				self.optimizer.zero_grad()
 				loss.backward()
 				self.optimizer.step()
@@ -158,11 +219,15 @@ class Trainer:
 					eval_nirs = eval_nirs.to(self.device, dtype=torch.float32)
 					eval_labels = eval_labels.to(self.device)
 					
-					model_output = self.model(eval_eeg, eval_nirs, last_batch=False)
-					outputs = model_output['outputs']
-					quan_loss = model_output['loss']
-					cls_loss = self.criterion(outputs, eval_labels.long())
-					loss = cls_loss + quan_loss
+					if self.model_name == 'EF-Book':
+						model_output = self.model(eval_eeg, eval_nirs, last_batch=False)
+						outputs = model_output['outputs']
+						quan_loss = model_output['loss']
+						cls_loss = self.criterion(outputs, eval_labels.long())
+						loss = cls_loss + quan_loss
+					else:
+						outputs = self.model(eval_eeg, eval_nirs)
+						loss = self.criterion(outputs, eval_labels.long())
 					total_loss += loss.item()
 					
 					preds = torch.argmax(outputs, dim=1)
@@ -218,7 +283,7 @@ args = get_args()
 # exp_name = args.exp_name
 start_time = time.time()
 curr_time = time.strftime('%b-%d-%Y-%H:%M:%S', time.localtime(start_time))
-exp_name = f'{args.model}_{curr_time}'
+exp_name = f'{args.model}_{curr_time}/'
 
 results_root = 'Results/' + exp_name
 
@@ -236,7 +301,7 @@ for subject in range(1, num_subject+1):
 	print(f"\n=== Subject {subject} ===")
 	print(f'Started {start_time_string}')
 	print(f'Seed is {seed}')
-	trainer = Trainer(args)
+	trainer = Trainer(args, exp_name)
 	all_labels, all_preds = trainer.train_subject(subject, mode)
 	total_labels.append(all_labels)
 	total_preds.append(all_preds)

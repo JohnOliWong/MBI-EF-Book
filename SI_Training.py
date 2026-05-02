@@ -24,6 +24,20 @@ import os
 import time
 
 
+class LabelSmoothing(torch.nn.Module):
+	def __init__(self, smoothing=0.0):
+		super(LabelSmoothing, self).__init__()
+		self.confidence = 1.0 - smoothing
+		self.smoothing = smoothing
+
+	def forward(self, x, target):
+		logprobs = torch.nn.functional.log_softmax(x, dim=-1)
+		nll_loss = -logprobs.gather(dim=-1, index=target.unsqueeze(1))
+		nll_loss = nll_loss.squeeze(1)
+		smooth_loss = -logprobs.mean(dim=-1)
+		loss = self.confidence * nll_loss + self.smoothing * smooth_loss
+		return loss.mean()
+
 class Trainer:
 	def __init__(self, args, exp_name):
 		self.args = args
@@ -34,26 +48,26 @@ class Trainer:
 		if self.model_name == 'EEGNet':
 			if self.mode != 2:
 				self.model = EEGNet(C=30, T=4000, num_classes=args.num_class, 
-									f1=8, depth=4, f2=4).to(self.device).to(torch.float32)
+									f1=8, depth=4, f2=4).to(self.device, dtype=torch.float32)
 			else:
 				self.model = EEGNet(C=30, T=2000, num_classes=args.num_class, 
-									f1=8, depth=4, f2=4).to(self.device).to(torch.float32)
+									f1=8, depth=4, f2=4).to(self.device, dtype=torch.float32)
 		
 		elif self.model_name == 'Conformer':
 			if self.mode != 2:
 				self.model = Conformer(emb_size=60, depth=4, 
-						      		   n_classes=args.num_class).to(self.device).to(torch.float32)
+						      		   n_classes=args.num_class).to(self.device, dtype=torch.float32)
 			else:
 				self.model = Conformer(emb_size=60, depth=6, 
-						   			   n_classes=args.num_class).to(self.device).to(torch.float32)
+						   			   n_classes=args.num_class).to(self.device, dtype=torch.float32)
 		
 		elif self.model_name == 'fNIRS-T':
 			if self.mode != 2:
 				self.model = fNIRS_T(n_class=args.num_class, sampling_point=200, dim=64, depth=6, 
-						 			 heads=8, mlp_dim=64).to(self.device).to(torch.float32)
+						 			 heads=8, mlp_dim=64).to(self.device, dtype=torch.float32)
 			else:
 				self.model = fNIRS_T(n_class=args.num_class, sampling_point=100, dim=64, depth=6, 
-						 			 heads=8, mlp_dim=64).to(self.device).to(torch.float32)
+						 			 heads=8, mlp_dim=64).to(self.device, dtype=torch.float32)
 
 		elif self.model_name == 'fNIRS-Net':
 			if self.mode != 2:
@@ -74,7 +88,7 @@ class Trainer:
 									num_classes=2, dropout=0.25).to(self.device, dtype=torch.float32)
 		
 		elif self.model_name == 'EF-Net':
-			self.model = EF_Net(num_classes=args.num_class, mode=args.mode).to(self.device)
+			self.model = EF_Net(num_classes=args.num_class, mode=args.mode).to(self.device, dtype=torch.float32)
 		
 		elif self.model_name == 'Vigilance-Net':
 			if self.mode != 2:
@@ -94,13 +108,17 @@ class Trainer:
 				args.emb_size, args.num_heads, args.expansion,
 				args.conv_dropout, args.self_dropout, args.cross_dropout, args.cls_dropout,
 				args.num_class, args.mode, self.device,
-			).to(self.device).to(torch.float32)
+			).to(self.device, dtype=torch.float32)
 		
 		elif self.model_name == 'EF-Book':
 			self.model = EF_VQ(args.dict_len, args.emb_size, args.threshold, 
-					  		   args.num_class, self.mode, self.device).to(self.device).to(torch.float32)
+					  		   args.num_class, self.mode, self.device).to(self.device, dtype=torch.float32)
 		
-		self.criterion = nn.CrossEntropyLoss()
+		if self.model_name in ['fNIRS-T', 'fNIRS-Net']:
+			self.criterion = LabelSmoothing(0.1)
+		else:
+			self.criterion = nn.CrossEntropyLoss()
+		
 		weight_decay = 0.2 * args.learning_rate
 		min_lr = 0.1 * args.learning_rate
 		self.optimizer = torch.optim.Adam(self.model.parameters(), lr=args.learning_rate, weight_decay=weight_decay)
@@ -139,10 +157,15 @@ class Trainer:
 		return train_dataset, test_dataset
 	
 	def train_subject(self, subject, mode):
+		dim = 4
+		if self.model_name == 'Vigilance-Net':
+			dim = 3
+		
 		if mode == 0 or mode == 1:
-			train_dataset, eval_dataset = si_data(subject, mode)
+			train_dataset, eval_dataset = si_data(subject, mode, dim=dim)
 		elif mode == 2:
-			train_dataset, eval_dataset = wg_data(subject, mode)
+			train_dataset, eval_dataset = wg_data(subject, mode, dim=dim)
+		
 		if self.args.z_score:
 			train_dataset, eval_dataset = self.z_score_mm(train_dataset, eval_dataset)
 		train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.args.batch_size, shuffle=True)
@@ -192,8 +215,14 @@ class Trainer:
 					quan_loss = model_output['loss']
 					cls_loss = self.criterion(outputs, batch_labels.long())
 					loss = cls_loss + quan_loss
-				else:
+				elif self.model_name in ['CAF-Net', 'EF-Net', 'Vigilance-Net', 'TSMMF']:
 					outputs = self.model(batch_eeg, batch_nirs)
+					loss = self.criterion(outputs, batch_labels.long())
+				elif self.model_name in ['EEGNet', 'Conformer']:
+					outputs = self.model(batch_eeg)
+					loss = self.criterion(outputs, batch_labels.long())
+				elif self.model_name in ['fNIRS-T', 'fNIRS-Net']:
+					outputs = self.model(batch_nirs)
 					loss = self.criterion(outputs, batch_labels.long())
 				self.optimizer.zero_grad()
 				loss.backward()
@@ -225,8 +254,14 @@ class Trainer:
 						quan_loss = model_output['loss']
 						cls_loss = self.criterion(outputs, eval_labels.long())
 						loss = cls_loss + quan_loss
-					else:
+					elif self.model_name in ['CAF-Net', 'EF-Net', 'Vigilance-Net', 'TSMMF']:
 						outputs = self.model(eval_eeg, eval_nirs)
+						loss = self.criterion(outputs, eval_labels.long())
+					elif self.model_name in ['EEGNet', 'Conformer']:
+						outputs = self.model(eval_eeg)
+						loss = self.criterion(outputs, eval_labels.long())
+					elif self.model_name in ['fNIRS-T', 'fNIRS-Net']:
+						outputs = self.model(eval_nirs)
 						loss = self.criterion(outputs, eval_labels.long())
 					total_loss += loss.item()
 					
@@ -279,11 +314,12 @@ class Trainer:
 
 args = get_args()
 
+mode = args.mode
 # use either a predefined string or the timestamp as the folder name to store the results
 # exp_name = args.exp_name
 start_time = time.time()
 curr_time = time.strftime('%b-%d-%Y-%H:%M:%S', time.localtime(start_time))
-exp_name = f'{args.model}_{curr_time}/'
+exp_name = f'{args.model}_{mode}_{curr_time}/'
 
 results_root = 'Results/' + exp_name
 
@@ -320,4 +356,4 @@ cm_visual = vis(subject, mode, results_root)
 cm_visual.plot_cm_all(total_labels, total_preds)
 
 # send email upon the completion of training
-send_yagmail(args.exp_name.split('/')[-2])
+send_yagmail(exp_name.split('/')[-2])

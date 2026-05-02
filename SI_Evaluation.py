@@ -26,42 +26,42 @@ class Trainer:
 	def __init__(self, args):
 		self.args = args
 		self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-		self.model = args.model
+		self.model_name = args.model
 		self.mode = args.mode
 
-		if self.model == 'EEGNet':
+		if self.model_name == 'EEGNet':
 			if self.mode != 2:
-				self.model = EEGNet(C=30, T=4000, num_classes=args.num_classes, 
-									f1=8, depth=4, f2=4).to(self.device).to(torch.float32)
+				self.model = EEGNet(C=30, T=4000, num_classes=args.num_class, 
+									f1=8, depth=4, f2=4).to(self.device, dtype=torch.float32)
 			else:
-				self.model = EEGNet(C=30, T=2000, num_classes=args.num_classes, 
-									f1=8, depth=4, f2=4).to(self.device).to(torch.float32)
+				self.model = EEGNet(C=30, T=2000, num_classes=args.num_class, 
+									f1=8, depth=4, f2=4).to(self.device, dtype=torch.float32)
 		
-		elif self.model == 'Conformer':
+		elif self.model_name == 'Conformer':
 			if self.mode != 2:
 				self.model = Conformer(emb_size=60, depth=4, 
-						      		   n_classes=args.num_classes).to(self.device).to(torch.float32)
+						      		   n_classes=args.num_class).to(self.device, dtype=torch.float32)
 			else:
 				self.model = Conformer(emb_size=60, depth=6, 
-						   			   n_classes=args.num_classes).to(self.device).to(torch.float32)
+						   			   n_classes=args.num_class).to(self.device, dtype=torch.float32)
 		
-		elif self.model == 'fNIRS-T':
+		elif self.model_name == 'fNIRS-T':
 			if self.mode != 2:
-				self.model = fNIRS_T(n_class=args.num_classes, sampling_point=200, dim=64, depth=6, 
-						 			 heads=8, mlp_dim=64).to(self.device).to(torch.float32)
+				self.model = fNIRS_T(n_class=args.num_class, sampling_point=200, dim=64, depth=6, 
+						 			 heads=8, mlp_dim=64).to(self.device, dtype=torch.float32)
 			else:
-				self.model = fNIRS_T(n_class=args.num_classes, sampling_point=100, dim=64, depth=6, 
-						 			 heads=8, mlp_dim=64).to(self.device).to(torch.float32)
+				self.model = fNIRS_T(n_class=args.num_class, sampling_point=100, dim=64, depth=6, 
+						 			 heads=8, mlp_dim=64).to(self.device, dtype=torch.float32)
 
-		elif self.model == 'fNIRS-Net':
+		elif self.model_name == 'fNIRS-Net':
 			if self.mode != 2:
-				self.model = fNIRSNet(num_class=args.num_classes, DHRConv_width=200, DWConv_height=72, 
+				self.model = fNIRSNet(num_class=args.num_class, DHRConv_width=200, DWConv_height=72, 
 						  			  num_DHRConv=4, num_DWConv=8).to(self.device, dtype=torch.float32)
 			elif self.mode == 2:
-				self.model = fNIRSNet(num_class=args.num_classes, DHRConv_width=100, DWConv_height=72, 
+				self.model = fNIRSNet(num_class=args.num_class, DHRConv_width=100, DWConv_height=72, 
 						  			  num_DHRConv=4, num_DWConv=8).to(self.device, dtype=torch.float32)
 
-		elif self.model == 'CAF-Net':
+		elif self.model_name == 'CAF-Net':
 			if self.mode != 2:
 				self.model = CAFNet(eeg_dim=4000, nirs_dim=200, hidden_size=128, num_layers=8, 
 									dim=128, heads=1, dim_head=128, mlp_dim=64, 
@@ -71,32 +71,32 @@ class Trainer:
 									dim=128, heads=1, dim_head=128, mlp_dim=64, 
 									num_classes=2, dropout=0.25).to(self.device, dtype=torch.float32)
 		
-		elif self.model == 'EF-Net':
-			self.model = EF_Net(num_classes=args.num_classes, mode=args.mode).to(self.device)
+		elif self.model_name == 'EF-Net':
+			self.model = EF_Net(num_classes=args.num_class, mode=args.mode).to(self.device, dtype=torch.float32)
 		
-		elif self.model == 'Vigilance-Net':
+		elif self.model_name == 'Vigilance-Net':
 			if self.mode != 2:
 				self.model = VigilanceNet(hidden_size=64, num_heads=4, ffn_dim=128, 
 										  attn_drop=0.25, proj_drop=0.25, feed_drop=0.25, 
-										  num_classes=args.num_classes, mode=self.mode
+										  num_classes=args.num_class, mode=self.mode
 										  ).to(self.device, dtype=torch.float32)
 			elif self.mode == 2:
 				self.model = VigilanceNet(hidden_size=64, num_heads=4, ffn_dim=128, 
 							  			  attn_drop=0.25, proj_drop=0.25, feed_drop=0.25, 
-										  num_classes=args.num_classes, mode=self.mode
+										  num_classes=args.num_class, mode=self.mode
 										  ).to(self.device, dtype=torch.float32)
 
-		elif self.model == 'TSMMF':
+		elif self.model_name == 'TSMMF':
 			self.model = HybridTransformer(
 				args.depth, args.query_size, args.key_size, args.value_size,
 				args.emb_size, args.num_heads, args.expansion,
 				args.conv_dropout, args.self_dropout, args.cross_dropout, args.cls_dropout,
-				args.num_classes, args.mode, self.device,
-			).to(self.device).to(torch.float32)
+				args.num_class, args.mode, self.device,
+			).to(self.device, dtype=torch.float32)
 		
-		elif self.model == 'EF-Book':
+		elif self.model_name == 'EF-Book':
 			self.model = EF_VQ(args.dict_len, args.emb_size, args.threshold, 
-					  		   args.num_class, self.mode, self.device).to(self.device).to(torch.float32)
+					  		   args.num_class, self.mode, self.device).to(self.device, dtype=torch.float32)
 
 		self.criterion = nn.CrossEntropyLoss()
 		weight_decay = 0.2 * args.learning_rate
@@ -141,14 +141,23 @@ class Trainer:
 		total_loss, total_correct = 0, 0
 		all_preds, all_labels = [], []
 		
+		num_batch = len(eval_loader)
 		with torch.no_grad():
-			for eval_eeg, eval_nirs, eval_labels in eval_loader:
-				eval_eeg = eval_eeg.to(self.device, dtype=torch.float64)
-				eval_nirs = eval_nirs.to(self.device, dtype=torch.float64)
+			for i, (eval_eeg, eval_nirs, eval_labels) in enumerate(eval_loader):
+				eval_eeg = eval_eeg.to(self.device, dtype=torch.float32)
+				eval_nirs = eval_nirs.to(self.device, dtype=torch.float32)
 				eval_labels = eval_labels.to(self.device)
+				last_batch = (i == num_batch - 1)
 				
-				model_output = self.model(eval_eeg, eval_nirs)
-				outputs = model_output['outputs']
+				if self.model_name == 'EF-Book':
+					model_output = self.model(eval_eeg, eval_nirs, last_batch=last_batch)
+					outputs = model_output['outputs']
+				elif self.mode_name in ['CAF-Net', 'EF-Net', 'Vigilance-Net', 'TSMMF']:
+					outputs = self.model(eval_eeg, eval_nirs)
+				elif self.mode_name in ['EEGNet', 'Conformer']:
+					outputs = self.model(eval_eeg)
+				elif self.mode_name in ['fNIRS-T', 'fNIRS-Net']:
+					outputs = self.model(eval_nirs)
 				preds = torch.argmax(outputs, dim=1)
 				total_correct += (preds == eval_labels).sum().item()
 				
@@ -163,8 +172,16 @@ class Trainer:
 		
 		return acc, precision, recall, f1, kappa
 	
-	def test_subject(self, results_root, subject, mode):
-		train_dataset, eval_dataset = si_data(subject, mode)
+	def test_subject(self, results_root, subject, mode):	
+		dim = 4
+		if self.model_name == 'Vigilance-Net':
+			dim = 3
+
+		if mode in [0, 1]:
+			train_dataset, eval_dataset = si_data(subject, mode, dim=dim)
+		elif mode == 2:
+			train_dataset, eval_dataset = wg_data(subject, mode, dim=dim)
+		
 		if self.args.z_score:
 			train_dataset, eval_dataset = self.z_score_mm(train_dataset, eval_dataset)
 		eval_loader = torch.utils.data.DataLoader(eval_dataset, batch_size=self.args.batch_size, shuffle=False)
@@ -174,8 +191,8 @@ class Trainer:
 		return eval_acc, precision, recall, f1, kappa
 
 # Load parameters
-exp_name = '8001/'
-results_root = 'Results/' + exp_name
+exp_name = 'EF-Book_May-02-2026-16:55:04/'
+results_root = 'Results/Batch I/' + exp_name
 config, seeds = load_param(results_root)
 args = argparse.Namespace(**config)
 results_path = Path(results_root)

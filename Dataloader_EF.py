@@ -15,10 +15,10 @@ class MultimodalDataset(Dataset):
 		return len(self.labels)
 
 	def __getitem__(self, index):
-		return self.eeg[index], self.nirs[index], self.labels[index]
+		return self.eeg[index].float(), self.nirs[index].float(), self.labels[index].long()
 
 
-def read_ef_train_si(subject, mode):
+def read_ef_train_si(subject, mode, dim=4):
 	'''
 	Training Set:
 	eeg.shape = [1680, 1, 30, 4000]
@@ -48,8 +48,9 @@ def read_ef_train_si(subject, mode):
 		nirs = data['nirs']
 		labels = data['labels']
 		if i == subject:
-			eeg = eeg.unsqueeze(1)
-			nirs = nirs.unsqueeze(1)
+			if dim == 4:
+				eeg = eeg.unsqueeze(1)
+				nirs = nirs.unsqueeze(1)
 			testing_set = {
 				'eeg': eeg,
 				'nirs': nirs,
@@ -62,10 +63,14 @@ def read_ef_train_si(subject, mode):
 	
 	training_set['eeg'] = torch.stack(training_eeg, dim=0)
 	training_set['eeg'] = training_set['eeg'].reshape(-1, training_set['eeg'].shape[2], training_set['eeg'].shape[3])
-	training_set['eeg'] = training_set['eeg'].unsqueeze(1)
+	if dim == 4:
+		training_set['eeg'] = training_set['eeg'].unsqueeze(1)
+
 	training_set['nirs'] = torch.stack(training_nirs, dim=0)
 	training_set['nirs'] = training_set['nirs'].reshape(-1, training_set['nirs'].shape[2], training_set['nirs'].shape[3])
-	training_set['nirs'] = training_set['nirs'].unsqueeze(1)
+	if dim == 4:
+		training_set['nirs'] = training_set['nirs'].unsqueeze(1)
+	
 	training_set['labels'] = torch.stack(training_labels, dim=0)
 	training_set['labels'] = training_set['labels'].reshape(-1)
 
@@ -78,7 +83,7 @@ def read_ef_train_si(subject, mode):
 	return training_set, testing_set
 
 
-def read_wg_pkl_si(subject, mode):
+def read_wg_pkl_si(subject, mode, dim=4):
 	'''
 	Training Set:
 	eeg [1500, 1, 30, 2000]
@@ -108,8 +113,9 @@ def read_wg_pkl_si(subject, mode):
 		nirs = torch.tensor(nirs, dtype=torch.float32)
 		labels = torch.tensor(labels, dtype=torch.long)
 		if i == subject:
-			eeg = eeg.unsqueeze(1)
-			nirs = nirs.unsqueeze(1)
+			if dim == 4:
+				eeg = eeg.unsqueeze(1)
+				nirs = nirs.unsqueeze(1)
 			testing_set = {
 				'eeg': eeg,
 				'nirs': nirs,
@@ -122,10 +128,14 @@ def read_wg_pkl_si(subject, mode):
 	
 	training_set['eeg'] = torch.stack(training_eeg, dim=0)
 	training_set['eeg'] = training_set['eeg'].reshape(-1, training_set['eeg'].shape[2], training_set['eeg'].shape[3])
-	training_set['eeg'] = training_set['eeg'].unsqueeze(1)
+	if dim == 4:
+		training_set['eeg'] = training_set['eeg'].unsqueeze(1)
+
 	training_set['nirs'] = torch.stack(training_nirs, dim=0)
 	training_set['nirs'] = training_set['nirs'].reshape(-1, training_set['nirs'].shape[2], training_set['nirs'].shape[3])
-	training_set['nirs'] = training_set['nirs'].unsqueeze(1)
+	if dim == 4:
+		training_set['nirs'] = training_set['nirs'].unsqueeze(1)
+
 	training_set['labels'] = torch.stack(training_labels, dim=0)
 	training_set['labels'] = training_set['labels'].reshape(-1)
 

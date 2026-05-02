@@ -266,16 +266,14 @@ class Encoder_EF(nn.Module):
         self.temporal_conv_layer = TemporalConvLayer(emb_size, conv_dropout)
  
         with torch.no_grad():
-            print(mode)
             if mode == 0 or mode == 1:
                 eeg, nirs = torch.randn(1, 30, 4000), torch.randn(1, 72, 200)
             elif mode == 2:
                 eeg, nirs = torch.randn(1, 30, 2000), torch.randn(1, 72, 100)
-            eeg_token, nirs_token = self.temporal_conv_layer(eeg, nirs)
-            channels = [eeg_token.shape[-1], nirs_token.shape[-1]]
 
             # time / 20, time / 4
-            print(channels)
+            eeg_token, nirs_token = self.temporal_conv_layer(eeg, nirs)
+            channels = [eeg_token.shape[-1], nirs_token.shape[-1]]
 
         self.transformer = Transformer(depth, query_size, key_size, value_size, emb_size, num_heads, channels,
                                        expansion, device, self_dropout, cross_dropout)

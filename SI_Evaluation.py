@@ -152,13 +152,20 @@ class Trainer:
 				if self.model_name == 'EF-Book':
 					model_output = self.model(eval_eeg, eval_nirs, last_batch=last_batch)
 					outputs = model_output['outputs']
-				elif self.mode_name in ['CAF-Net', 'EF-Net', 'Vigilance-Net', 'TSMMF']:
+					preds = torch.argmax(outputs, dim=1)
+				elif self.model_name == 'CAF-Net':
+					preds, c_loss, kd_loss = self.model(eval_eeg, eval_nirs, eval_labels)
+					preds = preds.max(1)[1]
+				elif self.mode_name in ['EF-Net', 'Vigilance-Net', 'TSMMF']:
 					outputs = self.model(eval_eeg, eval_nirs)
+					preds = torch.argmax(outputs, dim=1)
 				elif self.mode_name in ['EEGNet', 'Conformer']:
 					outputs = self.model(eval_eeg)
+					preds = torch.argmax(outputs, dim=1)
 				elif self.mode_name in ['fNIRS-T', 'fNIRS-Net']:
 					outputs = self.model(eval_nirs)
-				preds = torch.argmax(outputs, dim=1)
+					preds = torch.argmax(outputs, dim=1)
+
 				total_correct += (preds == eval_labels).sum().item()
 				
 				all_preds.extend(preds.cpu().numpy())
@@ -174,7 +181,7 @@ class Trainer:
 	
 	def test_subject(self, results_root, subject, mode):	
 		dim = 4
-		if self.model_name == 'Vigilance-Net':
+		if self.model_name in ['CAF-Net', 'Vigilance-Net']:
 			dim = 3
 
 		if mode in [0, 1]:

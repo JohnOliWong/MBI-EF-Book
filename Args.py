@@ -4,7 +4,7 @@ def get_args():
 	parser = ArgumentParser()
 
 	parser.add_argument('--num_class', type=int, default=2)
-	parser.add_argument('--model', type=str, default='EEGNet', help='EEGNet, Conformer, fNIRS-T, fNIRS-Net, ' \
+	parser.add_argument('--model', type=str, default='CAF-Net', help='EEGNet, Conformer, fNIRS-T, fNIRS-Net, ' \
 						'CAF-Net, EF-Net, Vigilance-Net, TSMMF, EF-Book')
 	parser.add_argument('--mi_root', type=str, default='data_main/junlin//BFM/Datasets/EF-MI/')
 	parser.add_argument('--ma_root', type=str, default='data_main/junlin/BFM/Datasets/EF-MA/')
@@ -14,8 +14,8 @@ def get_args():
 	parser.add_argument('--threshold', type=int, default=60)
 	parser.add_argument('--batch_size', type=int, default=32)
 	parser.add_argument('--warm_up', type=int, default=10)
-	parser.add_argument('--num_epochs', type=int, default=100)
-	parser.add_argument('--learning_rate', type=float, default=1e-3)
+	parser.add_argument('--num_epochs', type=int, default=200)
+	parser.add_argument('--learning_rate', type=float, default=5e-4)
 	parser.add_argument('--mode', type=int, default=0)
 	parser.add_argument('--exp_name', type=str, default='8100/')
 	parser.add_argument('--z_score', type=bool, default=True)

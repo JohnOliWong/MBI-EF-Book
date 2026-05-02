@@ -6,6 +6,7 @@ from Baselines.Conformer import Conformer
 from Baselines.fNIRST import fNIRS_T
 from Baselines.fNIRSNet import fNIRSNet
 from Baselines.CAFNet import CAFNet
+from Baselines.SPL_Loss import SPL_Loss
 from Baselines.EF_Net import EF_Net
 from Baselines.VigilanceNet import VigilanceNet
 from Baselines.TMMF import HybridTransformer
@@ -80,11 +81,11 @@ class Trainer:
 		elif self.model_name == 'CAF-Net':
 			if self.mode != 2:
 				self.model = CAFNet(eeg_dim=4000, nirs_dim=200, hidden_size=128, num_layers=8, 
-									dim=128, heads=1, dim_head=128, mlp_dim=64, 
+									dim=128, heads=4, dim_head=128, mlp_dim=256, 
 									num_classes=2, dropout=0.25).to(self.device, dtype=torch.float32)
 			elif self.mode == 2:
-				self.model = CAFNet(eeg_dim=2000, nirs_dim=100, hidden_size=128, num_layers=4, 
-									dim=128, heads=1, dim_head=128, mlp_dim=64, 
+				self.model = CAFNet(eeg_dim=2000, nirs_dim=100, hidden_size=64, num_layers=4, 
+									dim=64, heads=1, dim_head=64, mlp_dim=128, 
 									num_classes=2, dropout=0.25).to(self.device, dtype=torch.float32)
 		
 		elif self.model_name == 'EF-Net':
@@ -116,6 +117,9 @@ class Trainer:
 		
 		if self.model_name in ['fNIRS-T', 'fNIRS-Net']:
 			self.criterion = LabelSmoothing(0.1)
+		elif self.model_name == 'CAF-Net':
+			self.criterion = SPL_Loss(batch_size=args.batch_size, alpha=args.alpha, beta=args.beta, 
+							 		  spl_lambda=args.spl_lambda, spl_gamma=args.spl_gamma)
 		else:
 			self.criterion = nn.CrossEntropyLoss()
 		
@@ -158,7 +162,7 @@ class Trainer:
 	
 	def train_subject(self, subject, mode):
 		dim = 4
-		if self.model_name == 'Vigilance-Net':
+		if self.model_name in ['CAF-Net', 'Vigilance-Net']:
 			dim = 3
 		
 		if mode == 0 or mode == 1:
@@ -170,6 +174,9 @@ class Trainer:
 			train_dataset, eval_dataset = self.z_score_mm(train_dataset, eval_dataset)
 		train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=self.args.batch_size, shuffle=True)
 		eval_loader = torch.utils.data.DataLoader(eval_dataset, batch_size=self.args.batch_size, shuffle=False)
+
+		# CAF-Net uses cross-entropy loss for evaluation
+		cafnet_eval_criterion = nn.CrossEntropyLoss()
 	
 		# kaiming init
 		init = True
@@ -212,23 +219,31 @@ class Trainer:
 				if self.model_name == 'EF-Book':
 					model_output = self.model(batch_eeg, batch_nirs, last_batch=last_batch)
 					outputs = model_output['outputs']
+					preds = torch.argmax(outputs, dim=1)
 					quan_loss = model_output['loss']
 					cls_loss = self.criterion(outputs, batch_labels.long())
 					loss = cls_loss + quan_loss
-				elif self.model_name in ['CAF-Net', 'EF-Net', 'Vigilance-Net', 'TSMMF']:
+				elif self.model_name == 'CAF-Net':
+					preds, c_loss, kd_loss = self.model(batch_eeg, batch_nirs, batch_labels)
+					loss = self.criterion(preds, batch_labels, i, c_loss, kd_loss)
+					preds = preds.max(1)[1]
+				elif self.model_name in ['EF-Net', 'Vigilance-Net', 'TSMMF']:
 					outputs = self.model(batch_eeg, batch_nirs)
+					preds = torch.argmax(outputs, dim=1)
 					loss = self.criterion(outputs, batch_labels.long())
 				elif self.model_name in ['EEGNet', 'Conformer']:
 					outputs = self.model(batch_eeg)
+					preds = torch.argmax(outputs, dim=1)
 					loss = self.criterion(outputs, batch_labels.long())
 				elif self.model_name in ['fNIRS-T', 'fNIRS-Net']:
 					outputs = self.model(batch_nirs)
+					preds = torch.argmax(outputs, dim=1)
 					loss = self.criterion(outputs, batch_labels.long())
+				
 				self.optimizer.zero_grad()
 				loss.backward()
 				self.optimizer.step()
 				
-				preds = torch.argmax(outputs, dim=1)
 				total_correct += (preds == batch_labels).sum().item()
 				total_loss += loss.item()
 
@@ -251,21 +266,28 @@ class Trainer:
 					if self.model_name == 'EF-Book':
 						model_output = self.model(eval_eeg, eval_nirs, last_batch=False)
 						outputs = model_output['outputs']
+						preds = torch.argmax(outputs, dim=1)
 						quan_loss = model_output['loss']
 						cls_loss = self.criterion(outputs, eval_labels.long())
 						loss = cls_loss + quan_loss
-					elif self.model_name in ['CAF-Net', 'EF-Net', 'Vigilance-Net', 'TSMMF']:
+					elif self.model_name == 'CAF-Net':
+						preds, c_loss, kd_loss = self.model(eval_eeg, eval_nirs, eval_labels)
+						loss = cafnet_eval_criterion(preds, eval_labels) + args.alpha * c_loss + args.beta * kd_loss
+						preds = preds.max(1)[1]
+					elif self.model_name in ['EF-Net', 'Vigilance-Net', 'TSMMF']:
 						outputs = self.model(eval_eeg, eval_nirs)
+						preds = torch.argmax(outputs, dim=1)
 						loss = self.criterion(outputs, eval_labels.long())
 					elif self.model_name in ['EEGNet', 'Conformer']:
 						outputs = self.model(eval_eeg)
+						preds = torch.argmax(outputs, dim=1)
 						loss = self.criterion(outputs, eval_labels.long())
 					elif self.model_name in ['fNIRS-T', 'fNIRS-Net']:
 						outputs = self.model(eval_nirs)
+						preds = torch.argmax(outputs, dim=1)
 						loss = self.criterion(outputs, eval_labels.long())
-					total_loss += loss.item()
 					
-					preds = torch.argmax(outputs, dim=1)
+					total_loss += loss.item()
 					total_correct += (preds == eval_labels).sum().item()
 					
 					all_preds.extend(preds.cpu().numpy())
